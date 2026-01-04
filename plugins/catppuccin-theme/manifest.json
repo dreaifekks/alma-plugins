@@ -1,0 +1,105 @@
+{
+    "id": "catppuccin-theme",
+    "name": "Catppuccin Theme",
+    "version": "1.0.0",
+    "description": "A soothing pastel theme for Alma, based on the popular Catppuccin color palette",
+    "author": {
+        "name": "Alma Team",
+        "email": "hello@alma.dev"
+    },
+    "homepage": "https://github.com/catppuccin/catppuccin",
+    "main": "main.js",
+    "engines": {
+        "alma": "^0.1.0"
+    },
+    "type": "theme",
+    "keywords": ["theme", "catppuccin", "pastel", "dark", "light"],
+    "activationEvents": ["onStartup"],
+    "contributes": {
+        "themes": [
+            {
+                "id": "catppuccin-mocha",
+                "label": "Catppuccin Mocha",
+                "type": "dark",
+                "colors": {
+                    "background": "#1e1e2e",
+                    "foreground": "#cdd6f4",
+                    "primary": "#89b4fa",
+                    "secondary": "#a6e3a1",
+                    "accent": "#f5c2e7",
+                    "muted": "#6c7086",
+                    "border": "#313244",
+                    "error": "#f38ba8",
+                    "warning": "#fab387",
+                    "success": "#a6e3a1",
+                    "info": "#89b4fa"
+                }
+            },
+            {
+                "id": "catppuccin-macchiato",
+                "label": "Catppuccin Macchiato",
+                "type": "dark",
+                "colors": {
+                    "background": "#24273a",
+                    "foreground": "#cad3f5",
+                    "primary": "#8aadf4",
+                    "secondary": "#a6da95",
+                    "accent": "#f5bde6",
+                    "muted": "#6e738d",
+                    "border": "#363a4f",
+                    "error": "#ed8796",
+                    "warning": "#f5a97f",
+                    "success": "#a6da95",
+                    "info": "#8aadf4"
+                }
+            },
+            {
+                "id": "catppuccin-frappe",
+                "label": "Catppuccin Frappé",
+                "type": "dark",
+                "colors": {
+                    "background": "#303446",
+                    "foreground": "#c6d0f5",
+                    "primary": "#8caaee",
+                    "secondary": "#a6d189",
+                    "accent": "#f4b8e4",
+                    "muted": "#737994",
+                    "border": "#414559",
+                    "error": "#e78284",
+                    "warning": "#ef9f76",
+                    "success": "#a6d189",
+                    "info": "#8caaee"
+                }
+            },
+            {
+                "id": "catppuccin-latte",
+                "label": "Catppuccin Latte",
+                "type": "light",
+                "colors": {
+                    "background": "#eff1f5",
+                    "foreground": "#4c4f69",
+                    "primary": "#1e66f5",
+                    "secondary": "#40a02b",
+                    "accent": "#ea76cb",
+                    "muted": "#9ca0b0",
+                    "border": "#ccd0da",
+                    "error": "#d20f39",
+                    "warning": "#fe640b",
+                    "success": "#40a02b",
+                    "info": "#1e66f5"
+                }
+            }
+        ],
+        "configuration": {
+            "title": "Catppuccin Theme",
+            "properties": {
+                "catppuccin.accentColor": {
+                    "type": "string",
+                    "enum": ["rosewater", "flamingo", "pink", "mauve", "red", "maroon", "peach", "yellow", "green", "teal", "sky", "sapphire", "blue", "lavender"],
+                    "default": "mauve",
+                    "description": "The accent color to use for highlights"
+                }
+            }
+        }
+    }
+}

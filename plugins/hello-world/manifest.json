@@ -1,0 +1,33 @@
+{
+    "id": "hello-world",
+    "name": "Hello World",
+    "version": "1.0.0",
+    "description": "A simple example plugin that demonstrates basic plugin structure",
+    "author": {
+        "name": "Alma Team",
+        "email": "hello@alma.dev"
+    },
+    "main": "main.js",
+    "engines": {
+        "alma": "^0.1.0"
+    },
+    "type": "tool",
+    "permissions": ["notifications"],
+    "activationEvents": ["onStartup"],
+    "contributes": {
+        "tools": [
+            {
+                "id": "hello-world.greet",
+                "name": "Greet",
+                "description": "Say hello to the user"
+            }
+        ],
+        "commands": [
+            {
+                "id": "hello-world.sayHello",
+                "title": "Say Hello",
+                "category": "Hello World"
+            }
+        ]
+    }
+}

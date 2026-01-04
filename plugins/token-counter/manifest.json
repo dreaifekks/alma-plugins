@@ -1,0 +1,43 @@
+{
+    "id": "token-counter",
+    "name": "Token Counter",
+    "version": "1.0.0",
+    "description": "Displays token count and estimated cost in the status bar",
+    "author": {
+        "name": "Alma Team",
+        "email": "hello@alma.dev"
+    },
+    "main": "main.js",
+    "engines": {
+        "alma": "^0.1.0"
+    },
+    "type": "ui",
+    "permissions": ["chat:read"],
+    "activationEvents": ["onStartup"],
+    "contributes": {
+        "components": {
+            "statusBar": [
+                {
+                    "id": "token-counter.statusBar",
+                    "alignment": "right",
+                    "priority": 100
+                }
+            ]
+        },
+        "configuration": {
+            "title": "Token Counter",
+            "properties": {
+                "tokenCounter.showCost": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Show estimated cost alongside token count"
+                },
+                "tokenCounter.costPerMillionTokens": {
+                    "type": "number",
+                    "default": 3.0,
+                    "description": "Cost per million tokens (in USD)"
+                }
+            }
+        }
+    }
+}

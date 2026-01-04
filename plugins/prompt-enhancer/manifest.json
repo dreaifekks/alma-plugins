@@ -1,0 +1,52 @@
+{
+    "id": "prompt-enhancer",
+    "name": "Prompt Enhancer",
+    "version": "1.0.0",
+    "description": "Automatically enhances prompts with additional context and instructions for better AI responses",
+    "author": {
+        "name": "Alma Team",
+        "email": "hello@alma.dev"
+    },
+    "main": "main.js",
+    "engines": {
+        "alma": "^0.1.0"
+    },
+    "type": "transform",
+    "permissions": ["chat:read", "chat:write", "settings:read"],
+    "activationEvents": ["onStartup"],
+    "contributes": {
+        "commands": [
+            {
+                "id": "prompt-enhancer.toggle",
+                "title": "Toggle Prompt Enhancement",
+                "category": "Prompt Enhancer"
+            }
+        ],
+        "configuration": {
+            "title": "Prompt Enhancer",
+            "properties": {
+                "promptEnhancer.enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable automatic prompt enhancement"
+                },
+                "promptEnhancer.mode": {
+                    "type": "string",
+                    "enum": ["minimal", "standard", "detailed"],
+                    "default": "standard",
+                    "description": "Enhancement level: minimal adds basic context, standard adds structured instructions, detailed adds comprehensive guidelines"
+                },
+                "promptEnhancer.addTimestamp": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Add current date/time to system prompt"
+                },
+                "promptEnhancer.customInstructions": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Custom instructions to append to the system prompt"
+                }
+            }
+        }
+    }
+}
