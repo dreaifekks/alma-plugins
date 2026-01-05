@@ -187,6 +187,8 @@ export async function activate(context: PluginContext): Promise<PluginActivation
             logger.info('Loading historical tool data from messages...');
 
             const threads = await chat.listThreads();
+            logger.info(`Found ${threads.length} threads`);
+
             let totalToolCalls = 0;
             let threadsProcessed = 0;
 
@@ -218,7 +220,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                 threadsProcessed++;
 
                 if (threadToolCalls > 0) {
-                    logger.debug(`Thread ${thread.id}: loaded ${threadToolCalls} historical tool calls`);
+                    logger.info(`Thread ${thread.id}: loaded ${threadToolCalls} historical tool calls`);
                 }
             }
 
