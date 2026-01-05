@@ -8,6 +8,8 @@ import type { PluginContext, PluginActivation } from 'alma-plugin-api';
  * - Success/failure rates
  * - Average execution time
  * - Real-time status bar display
+ * - Persistent storage across sessions
+ * - Loads historical data from existing messages
  */
 
 interface ToolStats {
@@ -29,35 +31,154 @@ interface ExecutionRecord {
 }
 
 interface ThreadStats {
-    toolStats: Map<string, ToolStats>;
+    toolStats: Record<string, ToolStats>;
     recentExecutions: ExecutionRecord[];
 }
 
+interface StorageData {
+    threadStats: Record<string, ThreadStats>;
+    version: number;
+}
+
+const STORAGE_KEY = 'toolMonitorStats';
+const STORAGE_VERSION = 1;
+const MAX_RECENT = 100;
+
 export async function activate(context: PluginContext): Promise<PluginActivation> {
-    const { logger, events, ui, commands, settings } = context;
+    const { logger, events, ui, commands, settings, storage, chat } = context;
 
     logger.info('Tool Monitor plugin activated!');
 
-    // Statistics storage - per thread
-    const threadStatsMap = new Map<string, ThreadStats>();
+    // Statistics storage - per thread (will be loaded from storage)
+    let threadStatsMap: Record<string, ThreadStats> = {};
     let currentThreadId: string | null = null;
-    const MAX_RECENT = 100;
+    let initialized = false;
+
+    // Load stats from storage
+    const loadFromStorage = async (): Promise<void> => {
+        try {
+            const data = await storage.local.get<StorageData>(STORAGE_KEY);
+            if (data && data.version === STORAGE_VERSION) {
+                threadStatsMap = data.threadStats;
+                logger.info(`Loaded stats for ${Object.keys(threadStatsMap).length} threads from storage`);
+            }
+        } catch (error) {
+            logger.error('Failed to load stats from storage:', error);
+        }
+    };
+
+    // Save stats to storage
+    const saveToStorage = async (): Promise<void> => {
+        try {
+            const data: StorageData = {
+                threadStats: threadStatsMap,
+                version: STORAGE_VERSION,
+            };
+            await storage.local.set(STORAGE_KEY, data);
+        } catch (error) {
+            logger.error('Failed to save stats to storage:', error);
+        }
+    };
+
+    // Debounced save
+    let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+    const debouncedSave = (): void => {
+        if (saveTimeout) {
+            clearTimeout(saveTimeout);
+        }
+        saveTimeout = setTimeout(() => {
+            saveToStorage();
+            saveTimeout = null;
+        }, 1000);
+    };
 
     // Get or create stats for a thread
     const getThreadStats = (threadId: string): ThreadStats => {
-        if (!threadStatsMap.has(threadId)) {
-            threadStatsMap.set(threadId, {
-                toolStats: new Map<string, ToolStats>(),
+        if (!threadStatsMap[threadId]) {
+            threadStatsMap[threadId] = {
+                toolStats: {},
                 recentExecutions: [],
-            });
+            };
         }
-        return threadStatsMap.get(threadId)!;
+        return threadStatsMap[threadId];
     };
 
     // Get current thread's stats
     const getCurrentThreadStats = (): ThreadStats | null => {
         if (!currentThreadId) return null;
         return getThreadStats(currentThreadId);
+    };
+
+    // Get or create stats for a tool in a specific thread
+    const getToolStats = (threadId: string, tool: string): ToolStats => {
+        const threadStats = getThreadStats(threadId);
+        if (!threadStats.toolStats[tool]) {
+            threadStats.toolStats[tool] = {
+                calls: 0,
+                successes: 0,
+                failures: 0,
+                totalTime: 0,
+            };
+        }
+        return threadStats.toolStats[tool];
+    };
+
+    // Extract tool calls from message content
+    const extractToolCallsFromMessage = (content: unknown): string[] => {
+        const tools: string[] = [];
+
+        if (!content || typeof content !== 'object') return tools;
+
+        const msg = content as { parts?: Array<{ type: string; toolName?: string }> };
+        if (!msg.parts || !Array.isArray(msg.parts)) return tools;
+
+        for (const part of msg.parts) {
+            if (part.type === 'tool-invocation' && part.toolName) {
+                tools.push(part.toolName);
+            }
+        }
+
+        return tools;
+    };
+
+    // Load historical data from messages
+    const loadHistoricalData = async (): Promise<void> => {
+        try {
+            logger.info('Loading historical tool data from messages...');
+
+            const threads = await chat.listThreads();
+            let totalToolCalls = 0;
+
+            for (const thread of threads) {
+                // Skip if we already have data for this thread
+                if (threadStatsMap[thread.id]?.toolStats &&
+                    Object.keys(threadStatsMap[thread.id].toolStats).length > 0) {
+                    continue;
+                }
+
+                const messages = await chat.getMessages(thread.id);
+
+                for (const message of messages) {
+                    if (message.role !== 'assistant') continue;
+
+                    const toolNames = extractToolCallsFromMessage(message.content);
+
+                    for (const toolName of toolNames) {
+                        const stats = getToolStats(thread.id, toolName);
+                        stats.calls++;
+                        stats.successes++; // Assume historical calls were successful
+                        totalToolCalls++;
+                    }
+                }
+            }
+
+            if (totalToolCalls > 0) {
+                logger.info(`Loaded ${totalToolCalls} historical tool calls from ${threads.length} threads`);
+                await saveToStorage();
+            }
+        } catch (error) {
+            logger.error('Failed to load historical data:', error);
+        }
     };
 
     // Status bar item
@@ -73,20 +194,6 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         logToConsole: settings.get<boolean>('toolMonitor.logToConsole', true),
     });
 
-    // Get or create stats for a tool in a specific thread
-    const getToolStats = (threadId: string, tool: string): ToolStats => {
-        const threadStats = getThreadStats(threadId);
-        if (!threadStats.toolStats.has(tool)) {
-            threadStats.toolStats.set(tool, {
-                calls: 0,
-                successes: 0,
-                failures: 0,
-                totalTime: 0,
-            });
-        }
-        return threadStats.toolStats.get(tool)!;
-    };
-
     // Calculate totals for current thread
     const getTotals = () => {
         const threadStats = getCurrentThreadStats();
@@ -99,7 +206,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         let totalFailures = 0;
         let totalTime = 0;
 
-        for (const stats of threadStats.toolStats.values()) {
+        for (const stats of Object.values(threadStats.toolStats)) {
             totalCalls += stats.calls;
             totalSuccesses += stats.successes;
             totalFailures += stats.failures;
@@ -132,7 +239,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
             const lines = ['Tool Execution Summary (Current Thread)', ''];
 
             if (threadStats) {
-                const sortedTools = Array.from(threadStats.toolStats.entries())
+                const sortedTools = Object.entries(threadStats.toolStats)
                     .sort((a, b) => b[1].calls - a[1].calls)
                     .slice(0, 5);
 
@@ -144,8 +251,8 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                     lines.push(`${tool}: ${stats.calls} calls, ${successRate}% success, ${avgTime.toFixed(0)}ms avg`);
                 }
 
-                if (threadStats.toolStats.size > 5) {
-                    lines.push(`... and ${threadStats.toolStats.size - 5} more tools`);
+                if (Object.keys(threadStats.toolStats).length > 5) {
+                    lines.push(`... and ${Object.keys(threadStats.toolStats).length - 5} more tools`);
                 }
             }
 
@@ -222,6 +329,9 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         if (threadId === currentThreadId) {
             updateStatusBar();
         }
+
+        // Save to storage (debounced)
+        debouncedSave();
     });
 
     // Track tool errors
@@ -265,6 +375,9 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         if (threadId === currentThreadId) {
             updateStatusBar();
         }
+
+        // Save to storage (debounced)
+        debouncedSave();
     });
 
     // Command: Show detailed statistics
@@ -296,7 +409,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         ];
 
         if (threadStats) {
-            const sortedTools = Array.from(threadStats.toolStats.entries())
+            const sortedTools = Object.entries(threadStats.toolStats)
                 .sort((a, b) => b[1].calls - a[1].calls);
 
             for (const [tool, stats] of sortedTools) {
@@ -373,7 +486,8 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         );
 
         if (confirmed) {
-            threadStatsMap.delete(currentThreadId);
+            delete threadStatsMap[currentThreadId];
+            await saveToStorage();
             updateStatusBar();
             ui.showNotification('Thread statistics reset', { type: 'success' });
             logger.info(`Tool statistics reset for thread: ${currentThreadId}`);
@@ -388,10 +502,26 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         );
 
         if (confirmed) {
-            threadStatsMap.clear();
+            threadStatsMap = {};
+            await saveToStorage();
             updateStatusBar();
             ui.showNotification('All statistics reset', { type: 'success' });
             logger.info('All tool statistics reset');
+        }
+    });
+
+    // Command: Reload historical data
+    const reloadHistoricalDisposable = commands.register('toolMonitor.reloadHistorical', async () => {
+        const confirmed = await ui.showConfirmDialog(
+            'This will reload tool statistics from message history. Continue?',
+            { type: 'info', confirmLabel: 'Reload' }
+        );
+
+        if (confirmed) {
+            threadStatsMap = {};
+            await loadHistoricalData();
+            updateStatusBar();
+            ui.showNotification('Historical data reloaded', { type: 'success' });
         }
     });
 
@@ -403,12 +533,31 @@ export async function activate(context: PluginContext): Promise<PluginActivation
     // Set up status bar click handler
     statusItem.command = 'toolMonitor.showStats';
 
-    // Initialize
-    updateStatusBar();
+    // Initialize: load from storage, then load historical data for new threads
+    const initialize = async () => {
+        await loadFromStorage();
+        await loadHistoricalData();
+        initialized = true;
+        updateStatusBar();
+        logger.info('Tool Monitor initialized');
+    };
+
+    // Start initialization
+    initialize().catch(error => {
+        logger.error('Failed to initialize Tool Monitor:', error);
+    });
 
     return {
         dispose: () => {
             logger.info('Tool Monitor plugin deactivated');
+
+            // Clear any pending save
+            if (saveTimeout) {
+                clearTimeout(saveTimeout);
+                // Do a final sync save
+                saveToStorage();
+            }
+
             threadActivatedDisposable.dispose();
             willExecuteDisposable.dispose();
             didExecuteDisposable.dispose();
@@ -416,6 +565,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
             showStatsDisposable.dispose();
             resetDisposable.dispose();
             resetAllDisposable.dispose();
+            reloadHistoricalDisposable.dispose();
             settingsDisposable.dispose();
             statusItem.dispose();
         },

@@ -1,8 +1,8 @@
 {
     "id": "tool-monitor",
     "name": "Tool Monitor",
-    "version": "1.0.0",
-    "description": "Monitor and track all tool executions with statistics and performance metrics",
+    "version": "1.1.0",
+    "description": "Monitor and track all tool executions with statistics and performance metrics. Persists data across sessions and loads historical data from messages.",
     "author": {
         "name": "Alma Team"
     },
@@ -12,6 +12,7 @@
     },
     "type": "ui",
     "activationEvents": ["onStartup"],
+    "permissions": ["chat:read"],
     "contributes": {
         "commands": [
             {
@@ -20,7 +21,15 @@
             },
             {
                 "id": "toolMonitor.reset",
-                "title": "Reset Tool Statistics"
+                "title": "Reset Current Thread Statistics"
+            },
+            {
+                "id": "toolMonitor.resetAll",
+                "title": "Reset All Statistics"
+            },
+            {
+                "id": "toolMonitor.reloadHistorical",
+                "title": "Reload Historical Data"
             }
         ],
         "configuration": {
