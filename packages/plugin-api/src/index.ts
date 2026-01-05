@@ -126,6 +126,37 @@ export interface CommandsAPI {
 // ============================================================================
 
 /**
+ * Model pricing information (costs are per million tokens in USD).
+ */
+export interface ModelPricing {
+    /** Cost per million input tokens */
+    input?: number;
+    /** Cost per million output tokens */
+    output?: number;
+    /** Cost per million cached input tokens */
+    cacheRead?: number;
+}
+
+/**
+ * Token usage statistics.
+ */
+export interface TokenUsage {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    cachedInputTokens?: number;
+}
+
+/**
+ * Tool execution context.
+ */
+export interface ToolExecutionContext {
+    threadId: string;
+    messageId: string;
+    sessionId?: string;
+}
+
+/**
  * Available hook names for event subscriptions.
  */
 export type HookName =
@@ -134,8 +165,10 @@ export type HookName =
     | 'chat.message.didReceive'
     | 'chat.thread.created'
     | 'chat.thread.deleted'
+    | 'thread.activated'
     | 'tool.willExecute'
     | 'tool.didExecute'
+    | 'tool.onError'
     | 'app.ready'
     | 'app.willQuit';
 
@@ -151,16 +184,33 @@ export type HookHandler<T extends HookName> = (
  * Hook input types based on hook name.
  */
 export type HookInput<T extends HookName> = T extends 'chat.message.willSend'
-    ? { threadId: string; content: string; model: string }
+    ? { threadId: string; content: string; model: string; providerId: string }
     : T extends 'chat.message.didReceive'
-      ? { threadId: string; response: { content: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } } }
+      ? {
+            threadId: string;
+            model: string;
+            providerId: string;
+            response: { content: string; usage?: TokenUsage };
+            pricing?: ModelPricing;
+        }
       : T extends 'chat.thread.created'
-        ? { threadId: string; title: string }
-        : T extends 'tool.willExecute'
-          ? { toolId: string; params: unknown }
-          : T extends 'tool.didExecute'
-            ? { toolId: string; result: unknown }
-            : unknown;
+        ? { threadId: string; title: string; model?: string }
+        : T extends 'thread.activated'
+          ? {
+                threadId: string;
+                title?: string;
+                model?: string;
+                providerId?: string;
+                usage?: TokenUsage;
+                pricing?: ModelPricing;
+            }
+          : T extends 'tool.willExecute'
+            ? { tool: string; args: Record<string, unknown>; context: ToolExecutionContext }
+            : T extends 'tool.didExecute'
+              ? { tool: string; args: Record<string, unknown>; result: unknown; duration: number; context: ToolExecutionContext }
+              : T extends 'tool.onError'
+                ? { tool: string; args: Record<string, unknown>; error: Error; duration: number; context: ToolExecutionContext }
+                : unknown;
 
 /**
  * Hook output types based on hook name.
@@ -168,8 +218,12 @@ export type HookInput<T extends HookName> = T extends 'chat.message.willSend'
 export type HookOutput<T extends HookName> = T extends 'chat.message.willSend'
     ? { content?: string; cancel?: boolean }
     : T extends 'tool.willExecute'
-      ? { params?: unknown; cancel?: boolean }
-      : Record<string, unknown>;
+      ? { args?: Record<string, unknown>; cancel?: boolean }
+      : T extends 'tool.didExecute'
+        ? { result?: unknown }
+        : T extends 'tool.onError'
+          ? { result?: unknown; rethrow?: boolean }
+          : Record<string, unknown>;
 
 /**
  * API for subscribing to lifecycle events.
