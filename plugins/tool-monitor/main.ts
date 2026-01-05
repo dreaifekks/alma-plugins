@@ -282,7 +282,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
 
         if (totalCalls === 0) {
             statusItem.text = 'Tools: 0';
-            statusItem.tooltip = 'No tools executed yet\nClick for details';
+            statusItem.tooltip = 'No tools executed yet';
         } else {
             const failureIndicator = totalFailures > 0 ? ` (${totalFailures} failed)` : '';
             statusItem.text = `Tools: ${totalCalls}${failureIndicator}`;
@@ -308,7 +308,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                 }
             }
 
-            lines.push('', 'Click for full statistics');
+            lines.push('', '(Click the status bar item for details)');
             statusItem.tooltip = lines.join('\n');
         }
 
