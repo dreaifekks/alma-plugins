@@ -370,8 +370,9 @@ export interface UIAPI {
  */
 export interface Message {
     id: string;
+    threadId: string;
     role: 'user' | 'assistant' | 'system';
-    content: string;
+    content: unknown; // Can be string or UIMessage with parts
     createdAt: string;
 }
 
@@ -380,7 +381,7 @@ export interface Message {
  */
 export interface Thread {
     id: string;
-    title: string;
+    title?: string;
     model?: string;
     createdAt: string;
     updatedAt: string;
@@ -390,6 +391,7 @@ export interface Thread {
  * API for accessing chat threads and messages.
  */
 export interface ChatAPI {
+    listThreads(): Promise<Thread[]>;
     getThread(id: string): Promise<Thread | undefined>;
     getActiveThread(): Promise<Thread | undefined>;
     createThread(options?: { title?: string; model?: string }): Promise<Thread>;
