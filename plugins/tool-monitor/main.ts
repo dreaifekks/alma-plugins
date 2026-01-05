@@ -37,11 +37,12 @@ interface ThreadStats {
 
 interface StorageData {
     threadStats: Record<string, ThreadStats>;
+    loadedHistoricalThreads: string[]; // Track threads that have had historical data loaded
     version: number;
 }
 
 const STORAGE_KEY = 'toolMonitorStats';
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2; // Bump version for new storage format
 const MAX_RECENT = 100;
 
 export async function activate(context: PluginContext): Promise<PluginActivation> {
@@ -51,6 +52,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
 
     // Statistics storage - per thread (will be loaded from storage)
     let threadStatsMap: Record<string, ThreadStats> = {};
+    let loadedHistoricalThreads: Set<string> = new Set(); // Track threads with historical data loaded
     let currentThreadId: string | null = null;
     let initialized = false;
 
@@ -60,7 +62,13 @@ export async function activate(context: PluginContext): Promise<PluginActivation
             const data = await storage.local.get<StorageData>(STORAGE_KEY);
             if (data && data.version === STORAGE_VERSION) {
                 threadStatsMap = data.threadStats;
+                loadedHistoricalThreads = new Set(data.loadedHistoricalThreads || []);
                 logger.info(`Loaded stats for ${Object.keys(threadStatsMap).length} threads from storage`);
+            } else if (data) {
+                // Handle migration from old version - reset and reload
+                logger.info('Storage version mismatch, resetting...');
+                threadStatsMap = {};
+                loadedHistoricalThreads = new Set();
             }
         } catch (error) {
             logger.error('Failed to load stats from storage:', error);
@@ -72,6 +80,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         try {
             const data: StorageData = {
                 threadStats: threadStatsMap,
+                loadedHistoricalThreads: Array.from(loadedHistoricalThreads),
                 version: STORAGE_VERSION,
             };
             await storage.local.set(STORAGE_KEY, data);
@@ -142,21 +151,22 @@ export async function activate(context: PluginContext): Promise<PluginActivation
     };
 
     // Load historical data from messages
-    const loadHistoricalData = async (): Promise<void> => {
+    const loadHistoricalData = async (forceReload = false): Promise<void> => {
         try {
             logger.info('Loading historical tool data from messages...');
 
             const threads = await chat.listThreads();
             let totalToolCalls = 0;
+            let threadsProcessed = 0;
 
             for (const thread of threads) {
-                // Skip if we already have data for this thread
-                if (threadStatsMap[thread.id]?.toolStats &&
-                    Object.keys(threadStatsMap[thread.id].toolStats).length > 0) {
+                // Skip if we already loaded historical data for this thread (unless forcing reload)
+                if (!forceReload && loadedHistoricalThreads.has(thread.id)) {
                     continue;
                 }
 
                 const messages = await chat.getMessages(thread.id);
+                let threadToolCalls = 0;
 
                 for (const message of messages) {
                     if (message.role !== 'assistant') continue;
@@ -168,12 +178,21 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                         stats.calls++;
                         stats.successes++; // Assume historical calls were successful
                         totalToolCalls++;
+                        threadToolCalls++;
                     }
+                }
+
+                // Mark this thread as having historical data loaded
+                loadedHistoricalThreads.add(thread.id);
+                threadsProcessed++;
+
+                if (threadToolCalls > 0) {
+                    logger.debug(`Thread ${thread.id}: loaded ${threadToolCalls} historical tool calls`);
                 }
             }
 
-            if (totalToolCalls > 0) {
-                logger.info(`Loaded ${totalToolCalls} historical tool calls from ${threads.length} threads`);
+            if (totalToolCalls > 0 || threadsProcessed > 0) {
+                logger.info(`Loaded ${totalToolCalls} historical tool calls from ${threadsProcessed} threads`);
                 await saveToStorage();
             }
         } catch (error) {
@@ -487,6 +506,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
 
         if (confirmed) {
             delete threadStatsMap[currentThreadId];
+            loadedHistoricalThreads.delete(currentThreadId); // Allow re-loading historical data
             await saveToStorage();
             updateStatusBar();
             ui.showNotification('Thread statistics reset', { type: 'success' });
@@ -503,6 +523,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
 
         if (confirmed) {
             threadStatsMap = {};
+            loadedHistoricalThreads = new Set(); // Clear historical tracking
             await saveToStorage();
             updateStatusBar();
             ui.showNotification('All statistics reset', { type: 'success' });
@@ -518,8 +539,10 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         );
 
         if (confirmed) {
+            // Clear all stats and reload with force flag
             threadStatsMap = {};
-            await loadHistoricalData();
+            loadedHistoricalThreads = new Set();
+            await loadHistoricalData(true); // Force reload all threads
             updateStatusBar();
             ui.showNotification('Historical data reloaded', { type: 'success' });
         }
