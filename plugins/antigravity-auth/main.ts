@@ -123,7 +123,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
             const modelFamily = getModelFamily(urlModel);
             const headerStyle = modelFamily === 'claude' ? 'antigravity' : 'gemini-cli';
 
-            logger.debug(`URL model: ${urlModel}, family: ${modelFamily}, headerStyle: ${headerStyle}`);
+            logger.info(`URL model: ${urlModel}, family: ${modelFamily}, headerStyle: ${headerStyle}`);
 
             // Try endpoints with fallback
             let lastError: Error | null = null;
@@ -141,9 +141,10 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                         logger
                     );
 
-                    logger.debug(`Sending request to ${endpoint}, model=${transformed.effectiveModel}, streaming=${transformed.streaming}`);
-                    logger.debug(`Project ID: ${projectId}`);
-                    logger.debug(`Request body preview: ${transformed.body.slice(0, 500)}...`);
+                    logger.info(`Sending request to ${endpoint}, model=${transformed.effectiveModel}, streaming=${transformed.streaming}`);
+                    logger.info(`Project ID: ${projectId}`);
+                    logger.info(`Request URL: ${transformed.url}`);
+                    logger.info(`Request body: ${transformed.body}`);
 
                     // Step 5: Make the request
                     const response = await globalThis.fetch(transformed.url, {
