@@ -148,6 +148,7 @@ export function transformRequest(
 
     // Add Claude-specific thinking config
     // IMPORTANT: Claude uses snake_case keys (include_thoughts, thinking_budget)
+    // max_tokens must be greater than thinking.budget_tokens
     if (isThinking && thinkingBudget) {
         const generationConfig: GeminiGenerationConfig = geminiRequest.generationConfig || {};
 
@@ -155,6 +156,12 @@ export function transformRequest(
             include_thoughts: true,
             thinking_budget: thinkingBudget,
         };
+
+        // Ensure maxOutputTokens > thinkingBudget (required by Claude API)
+        const currentMax = generationConfig.maxOutputTokens || generationConfig.max_output_tokens || 0;
+        if (currentMax <= thinkingBudget) {
+            generationConfig.maxOutputTokens = thinkingBudget + 8192; // budget + reasonable output space
+        }
 
         geminiRequest.generationConfig = generationConfig;
     }
