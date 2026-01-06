@@ -182,13 +182,15 @@ export class CodexClient {
      * Codex returns SSE events like:
      *   data: {"type":"response.ongoing","response":{"output":[{"content":[{"text":"Hello"}]}]}}
      *
-     * We transform this to a stream of text chunks.
+     * IMPORTANT: Codex API returns CUMULATIVE content in each event, not deltas.
+     * We need to track what we've already sent and only stream the new portions.
      */
     private transformSSEStream(body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
         const reader = body.getReader();
         const decoder = new TextDecoder();
         const encoder = new TextEncoder();
         let buffer = '';
+        let previousText = ''; // Track what we've already sent
 
         return new ReadableStream<Uint8Array>({
             async pull(controller) {
@@ -217,9 +219,13 @@ export class CodexClient {
 
                         try {
                             const event = JSON.parse(data);
-                            const text = extractTextFromEvent(event);
-                            if (text) {
-                                controller.enqueue(encoder.encode(text));
+                            const fullText = extractTextFromEvent(event);
+
+                            // Only send the delta (new portion of text)
+                            if (fullText && fullText.length > previousText.length) {
+                                const delta = fullText.slice(previousText.length);
+                                controller.enqueue(encoder.encode(delta));
+                                previousText = fullText;
                             }
                         } catch {
                             // Skip invalid JSON
