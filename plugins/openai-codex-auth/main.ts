@@ -483,6 +483,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
 
         async getModels() {
             // Return all supported models
+            // All Codex models support tools (function calling)
             return CODEX_MODELS.map(model => ({
                 id: model.id,
                 name: model.name,
@@ -492,6 +493,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                 capabilities: {
                     streaming: true,
                     reasoning: model.reasoning !== 'none',
+                    tools: true, // All Codex models support function calling
                 },
                 providerOptions: {
                     reasoning: model.reasoning,
