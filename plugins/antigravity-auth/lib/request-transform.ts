@@ -128,9 +128,9 @@ export function transformRequest(
     const isThinking = isClaudeThinkingModel(requestedModel);
     const streaming = isStreamingRequest(originalUrl);
 
-    // Configure Claude tool calling to use VALIDATED mode (always for Claude, even without tools)
-    // This matches opencode-antigravity-auth behavior
-    if (isClaude) {
+    // Configure Claude tool calling to use VALIDATED mode (only when tools are present)
+    // When no tools, don't set toolConfig (as shown in opencode's buildThinkingWarmupBody)
+    if (isClaude && geminiRequest.tools && geminiRequest.tools.length > 0) {
         if (!geminiRequest.toolConfig) {
             geminiRequest.toolConfig = {};
         }
