@@ -24,9 +24,9 @@ import { getModelFamily, isClaudeThinkingModel, parseModelWithTier } from './mod
 // ============================================================================
 
 // Antigravity API endpoints (in fallback order)
-// Note: autopush endpoint is unavailable per API spec
 export const ANTIGRAVITY_ENDPOINTS = [
     'https://daily-cloudcode-pa.sandbox.googleapis.com',
+    'https://autopush-cloudcode-pa.sandbox.googleapis.com',
     'https://cloudcode-pa.googleapis.com',
 ] as const;
 

@@ -143,6 +143,8 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                     );
 
                     logger.debug(`Sending request to ${endpoint}, model=${transformed.effectiveModel}, streaming=${transformed.streaming}`);
+                    logger.debug(`Project ID: ${projectId}`);
+                    logger.debug(`Request body preview: ${transformed.body.slice(0, 500)}...`);
 
                     // Step 5: Make the request
                     const response = await globalThis.fetch(transformed.url, {
