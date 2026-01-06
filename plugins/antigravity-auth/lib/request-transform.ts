@@ -147,19 +147,9 @@ export function transformRequest(
     }
 
     // Add Claude-specific config
-    // Testing: completely remove thinkingConfig to see if it's the issue
+    // Testing: remove both thinkingConfig and maxOutputTokens override
     if (isThinking && thinkingBudget) {
-        const generationConfig: GeminiGenerationConfig = geminiRequest.generationConfig || {};
-
-        // Ensure maxOutputTokens is large enough for thinking
-        if (!generationConfig.maxOutputTokens || generationConfig.maxOutputTokens <= thinkingBudget) {
-            generationConfig.maxOutputTokens = CLAUDE_THINKING_MAX_OUTPUT_TOKENS;
-        }
-
-        // Remove thinkingConfig entirely for testing
-        delete generationConfig.thinkingConfig;
-
-        geminiRequest.generationConfig = generationConfig;
+        // Don't set any special config for now - testing if basic request works
     }
 
     // Add thinking hint for Claude thinking models with tools
