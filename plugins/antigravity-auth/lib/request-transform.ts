@@ -19,7 +19,7 @@ import type {
     HeaderStyle,
     AntigravityHeaders,
 } from './types';
-import { getModelFamily, isClaudeThinkingModel, parseModelWithTier } from './models';
+import { getModelFamily, isClaudeThinkingModel, parseModelWithTier, isImageModel, parseImageAspectRatio } from './models';
 import { cacheSignature, getCachedSignature } from './signature-cache';
 import { sanitizeToolsForAntigravity } from './schema-sanitizer';
 import { analyzeConversationState, closeToolLoopForThinking, needsThinkingRecovery } from './thinking-recovery';
@@ -329,6 +329,26 @@ export function transformRequest(
             logger?.debug('Thinking recovery: closing tool loop and starting fresh turn');
             geminiRequest.contents = closeToolLoopForThinking(geminiRequest.contents);
         }
+    }
+
+    // Add image generation config for Gemini image models
+    const isImage = isImageModel(requestedModel);
+    if (isImage) {
+        const aspectRatio = parseImageAspectRatio(requestedModel);
+        const generationConfig: GeminiGenerationConfig = geminiRequest.generationConfig || {};
+
+        // Add imageConfig for aspect ratio
+        generationConfig.imageConfig = {
+            aspectRatio,
+        };
+
+        geminiRequest.generationConfig = generationConfig;
+
+        // Remove tools for image models (they don't support function calling)
+        delete geminiRequest.tools;
+        delete geminiRequest.toolConfig;
+
+        logger?.debug(`Image generation config: model=${requestedModel}, aspectRatio=${aspectRatio}`);
     }
 
     // Add session ID for multi-turn conversations

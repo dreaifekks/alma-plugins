@@ -16,7 +16,7 @@
 import type { PluginContext, PluginActivation } from 'alma-plugin-api';
 import { TokenStore } from './lib/token-store';
 import { getAuthorizationUrl, exchangeCodeForTokens } from './lib/auth';
-import { ANTIGRAVITY_MODELS, getModelFamily, isClaudeThinkingModel } from './lib/models';
+import { ANTIGRAVITY_MODELS, getModelFamily, isClaudeThinkingModel, isImageModel, parseImageAspectRatio } from './lib/models';
 import type { ManagedAccount, ModelFamily, HeaderStyle } from './lib/account-manager';
 import {
     isGenerativeLanguageRequest,
@@ -320,7 +320,8 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                 capabilities: {
                     streaming: true,
                     reasoning: isClaudeThinkingModel(model.id),
-                    functionCalling: true,
+                    functionCalling: !model.imageOutput, // Image models don't support function calling
+                    imageOutput: model.imageOutput ?? false,
                 },
                 providerOptions: {
                     family: model.family,

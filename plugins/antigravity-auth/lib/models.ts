@@ -142,6 +142,71 @@ export const ANTIGRAVITY_MODELS: AntigravityModelInfo[] = [
         contextWindow: 1048576,
         maxOutputTokens: 65536,
     },
+
+    // -------------------------------------------------------------------------
+    // Gemini 3 Pro Image Models
+    // Base model with aspect ratio variants
+    // -------------------------------------------------------------------------
+    {
+        id: 'gemini-3-pro-image',
+        name: 'Gemini 3 Pro (Image)',
+        description: 'Gemini 3 Pro with image generation (1:1)',
+        baseModel: 'gemini-3-pro-image',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+        imageOutput: true,
+    },
+    {
+        id: 'gemini-3-pro-image-16x9',
+        name: 'Gemini 3 Pro (Image 16:9)',
+        description: 'Gemini 3 Pro with image generation (16:9 widescreen)',
+        baseModel: 'gemini-3-pro-image',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+        imageOutput: true,
+    },
+    {
+        id: 'gemini-3-pro-image-9x16',
+        name: 'Gemini 3 Pro (Image 9:16)',
+        description: 'Gemini 3 Pro with image generation (9:16 portrait)',
+        baseModel: 'gemini-3-pro-image',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+        imageOutput: true,
+    },
+    {
+        id: 'gemini-3-pro-image-4x3',
+        name: 'Gemini 3 Pro (Image 4:3)',
+        description: 'Gemini 3 Pro with image generation (4:3)',
+        baseModel: 'gemini-3-pro-image',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+        imageOutput: true,
+    },
+    {
+        id: 'gemini-3-pro-image-3x4',
+        name: 'Gemini 3 Pro (Image 3:4)',
+        description: 'Gemini 3 Pro with image generation (3:4 portrait)',
+        baseModel: 'gemini-3-pro-image',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+        imageOutput: true,
+    },
+    {
+        id: 'gemini-3-pro-image-21x9',
+        name: 'Gemini 3 Pro (Image 21:9)',
+        description: 'Gemini 3 Pro with image generation (21:9 ultra-wide)',
+        baseModel: 'gemini-3-pro-image',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+        imageOutput: true,
+    },
 ];
 
 // ============================================================================
@@ -222,6 +287,46 @@ export function getThinkingLevel(modelId: string): ThinkingLevel {
     const cleanId = stripProviderPrefix(modelId);
     const model = getModelInfo(cleanId);
     return model?.thinking ?? 'none';
+}
+
+/**
+ * Check if a model is an image generation model
+ */
+export function isImageModel(modelId: string): boolean {
+    const cleanId = stripProviderPrefix(modelId);
+    const model = getModelInfo(cleanId);
+    if (model) {
+        return model.imageOutput === true;
+    }
+    // Fallback detection from model ID
+    return cleanId.toLowerCase().includes('gemini-3-pro-image');
+}
+
+/**
+ * Parse aspect ratio from image model ID
+ * e.g., 'gemini-3-pro-image-16x9' -> '16:9'
+ */
+export function parseImageAspectRatio(modelId: string): string {
+    const cleanId = stripProviderPrefix(modelId).toLowerCase();
+
+    // Map of suffixes to aspect ratios
+    const aspectRatioMap: Record<string, string> = {
+        '-16x9': '16:9',
+        '-9x16': '9:16',
+        '-4x3': '4:3',
+        '-3x4': '3:4',
+        '-21x9': '21:9',
+        '-1x1': '1:1',
+    };
+
+    for (const [suffix, ratio] of Object.entries(aspectRatioMap)) {
+        if (cleanId.endsWith(suffix)) {
+            return ratio;
+        }
+    }
+
+    // Default aspect ratio
+    return '1:1';
 }
 
 /**

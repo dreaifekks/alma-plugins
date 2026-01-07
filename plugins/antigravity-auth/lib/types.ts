@@ -44,6 +44,7 @@ export interface AntigravityModelInfo {
     thinkingBudget?: number; // Token budget for thinking
     contextWindow?: number;
     maxOutputTokens?: number;
+    imageOutput?: boolean; // Model can generate images
 }
 
 // ============================================================================
@@ -115,6 +116,9 @@ export interface GeminiGenerationConfig {
         thinking_budget?: number;
         thinkingBudget?: number;
         thinkingLevel?: string;
+    };
+    imageConfig?: {
+        aspectRatio?: string; // e.g., '1:1', '16:9', '9:16', '4:3', '3:4', '21:9'
     };
     maxOutputTokens?: number;
     max_output_tokens?: number;
