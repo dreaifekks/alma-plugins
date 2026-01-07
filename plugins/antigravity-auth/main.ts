@@ -5,6 +5,8 @@
  * via OAuth authentication. This plugin registers a custom provider that handles
  * authentication and API calls to the Antigravity backend.
  *
+ * Supports multiple accounts with automatic rotation on rate limits.
+ *
  * Based on opencode-antigravity-auth and follows openai-codex-auth patterns.
  *
  * DISCLAIMER: This plugin is for personal development use only with your
@@ -14,14 +16,14 @@
 import type { PluginContext, PluginActivation } from 'alma-plugin-api';
 import { TokenStore } from './lib/token-store';
 import { getAuthorizationUrl, exchangeCodeForTokens } from './lib/auth';
-import { ANTIGRAVITY_MODELS, getModelFamily, isClaudeThinkingModel, parseModelWithTier } from './lib/models';
+import { ANTIGRAVITY_MODELS, getModelFamily, isClaudeThinkingModel } from './lib/models';
+import type { ManagedAccount, ModelFamily, HeaderStyle } from './lib/account-manager';
 import {
     isGenerativeLanguageRequest,
     transformRequest,
     transformStreamingResponse,
     transformNonStreamingResponse,
     ANTIGRAVITY_ENDPOINTS,
-    PRIMARY_ENDPOINT,
 } from './lib/request-transform';
 
 // ============================================================================
@@ -37,6 +39,9 @@ const HTTP_STATUS = {
     SERVER_ERROR: 500,
 } as const;
 
+// Default retry-after time in ms (5 minutes)
+const DEFAULT_RETRY_AFTER_MS = 5 * 60 * 1000;
+
 // ============================================================================
 // Plugin Activation
 // ============================================================================
@@ -51,49 +56,44 @@ export async function activate(context: PluginContext): Promise<PluginActivation
     await tokenStore.initialize();
 
     // =========================================================================
+    // Helper Functions
+    // =========================================================================
+
+    /**
+     * Parse retry-after header to milliseconds
+     */
+    const parseRetryAfter = (response: Response): number => {
+        const retryAfter = response.headers.get('retry-after');
+        if (retryAfter) {
+            const seconds = parseInt(retryAfter, 10);
+            if (!isNaN(seconds)) {
+                return seconds * 1000;
+            }
+        }
+        return DEFAULT_RETRY_AFTER_MS;
+    };
+
+    /**
+     * Determine model family from URL model string
+     */
+    const getModelFamilyFromUrl = (urlModel: string): ModelFamily => {
+        return getModelFamily(urlModel) as ModelFamily;
+    };
+
+    // =========================================================================
     // Custom Fetch Wrapper
     // =========================================================================
 
     /**
-     * Map rate limit responses
-     */
-    const handleRateLimitResponse = async (response: Response): Promise<Response | null> => {
-        if (response.status !== HTTP_STATUS.TOO_MANY_REQUESTS) return null;
-
-        // Extract retry-after info if available
-        const retryAfter = response.headers.get('retry-after');
-        const headers = new Headers(response.headers);
-
-        if (retryAfter) {
-            headers.set('retry-after', retryAfter);
-        }
-
-        logger.warn('Rate limited by Antigravity API');
-        return new Response(response.body, {
-            status: HTTP_STATUS.TOO_MANY_REQUESTS,
-            statusText: 'Too Many Requests',
-            headers,
-        });
-    };
-
-    /**
      * Creates a custom fetch function that:
-     * 1. Refreshes OAuth token if needed
+     * 1. Gets account with automatic rotation on rate limits
      * 2. Transforms request to Antigravity format
-     * 3. Adds OAuth headers
+     * 3. Handles rate limiting with account rotation
      * 4. Handles response transformation
      */
     const createAntigravityFetch = (): typeof globalThis.fetch => {
         return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-            // Step 1: Get fresh access token
-            const accessToken = await tokenStore.getValidAccessToken();
-            const projectId = tokenStore.getProjectId();
-
-            if (!projectId) {
-                throw new Error('Project ID not found. Please re-authenticate.');
-            }
-
-            // Step 2: Extract URL string
+            // Extract URL string
             let url: string;
             if (typeof input === 'string') {
                 url = input;
@@ -103,95 +103,126 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                 url = input.url;
             }
 
-            // Step 3: Check if this is a Generative Language API request
+            // Check if this is a Generative Language API request
             if (!isGenerativeLanguageRequest(url)) {
                 // Not an Antigravity request, pass through
                 return globalThis.fetch(input, init);
             }
 
-            // Step 4: Transform request
+            // Extract model from URL (Gemini SDK puts model in URL, not body)
+            const urlModel = url.match(/\/models\/([^:/?]+)/)?.[1] || '';
+            const modelFamily = getModelFamilyFromUrl(urlModel);
+
+            // Get request body
             let body = init?.body;
             if (typeof body !== 'string') {
                 throw new Error('Request body must be a string');
             }
 
-            // Extract model from URL (Gemini SDK puts model in URL, not body)
-            const urlModel = url.match(/\/models\/([^:/?]+)/)?.[1] || '';
-
-            // Determine header style based on model family
-            // Claude models need 'antigravity' headers, Gemini models use 'gemini-cli' headers
-            const modelFamily = getModelFamily(urlModel);
-            const headerStyle = modelFamily === 'claude' ? 'antigravity' : 'gemini-cli';
-
-            logger.info(`URL model: ${urlModel}, family: ${modelFamily}, headerStyle: ${headerStyle}`);
-
-            // Try endpoints with fallback
+            // Try to make request with account rotation
             let lastError: Error | null = null;
             let lastResponse: Response | null = null;
+            let attempts = 0;
+            const maxAttempts = tokenStore.getAccountCount() * 2; // Allow 2 attempts per account
 
-            for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
+            while (attempts < maxAttempts) {
+                attempts++;
+
+                // Get account with automatic rotation
+                let accountInfo: { accessToken: string; projectId: string; account: ManagedAccount; headerStyle: HeaderStyle };
                 try {
-                    const transformed = transformRequest(
-                        url,
-                        body,
-                        accessToken,
-                        projectId,
-                        headerStyle,
-                        endpoint,
-                        logger
-                    );
+                    accountInfo = await tokenStore.getValidAccessTokenForFamily(modelFamily);
+                } catch (error) {
+                    // All accounts rate limited or no accounts
+                    throw error;
+                }
 
-                    logger.info(`Sending request to ${endpoint}, model=${transformed.effectiveModel}, streaming=${transformed.streaming}`);
-                    logger.info(`Project ID: ${projectId}`);
-                    logger.info(`Request URL: ${transformed.url}`);
-                    logger.info(`Request body: ${transformed.body}`);
+                const { accessToken, projectId, account, headerStyle } = accountInfo;
 
-                    // Step 5: Make the request
-                    const response = await globalThis.fetch(transformed.url, {
-                        method: 'POST',
-                        headers: transformed.headers,
-                        body: transformed.body,
-                    });
+                logger.info(`URL model: ${urlModel}, family: ${modelFamily}, headerStyle: ${headerStyle}, account: ${account.index} (${account.email || 'unknown'})`);
 
-                    // Step 6: Handle rate limiting
-                    if (response.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
-                        const rateLimitResponse = await handleRateLimitResponse(response);
-                        if (rateLimitResponse) {
-                            logger.warn(`Rate limited at ${endpoint}, returning error`);
-                            return rateLimitResponse;
+                // Try endpoints with fallback
+                for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
+                    try {
+                        const transformed = transformRequest(
+                            url,
+                            body,
+                            accessToken,
+                            projectId,
+                            headerStyle,
+                            endpoint,
+                            logger
+                        );
+
+                        logger.info(`Sending request to ${endpoint}, model=${transformed.effectiveModel}, streaming=${transformed.streaming}`);
+                        logger.debug(`Project ID: ${projectId}`);
+                        logger.debug(`Request URL: ${transformed.url}`);
+
+                        // Make the request
+                        const response = await globalThis.fetch(transformed.url, {
+                            method: 'POST',
+                            headers: transformed.headers,
+                            body: transformed.body,
+                        });
+
+                        // Handle rate limiting - mark account and retry with next
+                        if (response.status === HTTP_STATUS.TOO_MANY_REQUESTS) {
+                            const retryAfterMs = parseRetryAfter(response);
+                            logger.warn(`Rate limited at ${endpoint}, account ${account.index}, retry after ${retryAfterMs}ms`);
+
+                            // Mark this account as rate limited for this family/headerStyle
+                            await tokenStore.markRateLimited(account, retryAfterMs, modelFamily, headerStyle);
+
+                            // If we have more accounts, try next one
+                            if (!tokenStore.getAccountManager().allAccountsRateLimited(modelFamily)) {
+                                logger.info('Switching to next available account...');
+                                break; // Break from endpoint loop to try next account
+                            }
+
+                            // All accounts rate limited, return error
+                            const headers = new Headers(response.headers);
+                            headers.set('retry-after', String(Math.ceil(retryAfterMs / 1000)));
+                            return new Response(response.body, {
+                                status: HTTP_STATUS.TOO_MANY_REQUESTS,
+                                statusText: 'Too Many Requests',
+                                headers,
+                            });
                         }
-                    }
 
-                    // Step 7: Handle server errors - try next endpoint
-                    if (response.status >= HTTP_STATUS.SERVER_ERROR) {
-                        const errorText = await response.clone().text();
-                        logger.warn(`Server error at ${endpoint}: ${response.status}`, errorText);
-                        lastResponse = response;
-                        lastError = new Error(`Server error: ${response.status}`);
+                        // Handle server errors - try next endpoint
+                        if (response.status >= HTTP_STATUS.SERVER_ERROR) {
+                            const errorText = await response.clone().text();
+                            logger.warn(`Server error at ${endpoint}: ${response.status}`, errorText);
+                            lastResponse = response;
+                            lastError = new Error(`Server error: ${response.status}`);
+                            continue;
+                        }
+
+                        // Handle non-OK responses
+                        if (!response.ok) {
+                            const errorText = await response.clone().text();
+                            logger.error(`Antigravity API error: ${response.status}`, errorText);
+                            return response;
+                        }
+
+                        // Success! Transform response
+                        if (transformed.streaming) {
+                            return transformStreamingResponse(response, transformed.sessionId);
+                        } else {
+                            return await transformNonStreamingResponse(response, transformed.sessionId);
+                        }
+                    } catch (error) {
+                        logger.error(`Error with endpoint ${endpoint}:`, error);
+                        lastError = error instanceof Error ? error : new Error(String(error));
                         continue;
                     }
-
-                    // Step 8: Handle non-OK responses
-                    if (!response.ok) {
-                        const errorText = await response.clone().text();
-                        logger.error(`Antigravity API error: ${response.status}`, errorText);
-                        return response;
-                    }
-
-                    // Step 9: Transform response (pass sessionId for signature caching)
-                    if (transformed.streaming) {
-                        return transformStreamingResponse(response, transformed.sessionId);
-                    } else {
-                        return await transformNonStreamingResponse(response, transformed.sessionId);
-                    }
-                } catch (error) {
-                    logger.error(`Error with endpoint ${endpoint}:`, error);
-                    lastError = error instanceof Error ? error : new Error(String(error));
-                    continue;
                 }
+
+                // If we got here due to rate limit, the outer while loop will try next account
+                // Otherwise, all endpoints failed for this account
             }
 
-            // All endpoints failed
+            // All attempts failed
             if (lastResponse) {
                 return lastResponse;
             }
@@ -206,7 +237,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
     const providerDisposable = providers.register({
         id: 'antigravity',
         name: 'Antigravity (Google)',
-        description: 'Access Claude and Gemini models via your Antigravity subscription',
+        description: 'Access Claude and Gemini models via your Antigravity subscription (supports multiple accounts)',
         authType: 'oauth',
         sdkType: 'google', // Use Google Generative AI SDK (Gemini format)
 
@@ -228,7 +259,11 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                 await tokenStore.storePendingState(state);
 
                 // Show notification
-                ui.showNotification('Opening browser for Google login...', { type: 'info' });
+                const accountCount = tokenStore.getAccountCount();
+                const message = accountCount > 0
+                    ? `Adding another account (currently ${accountCount})...`
+                    : 'Opening browser for Google login...';
+                ui.showNotification(message, { type: 'info' });
 
                 // Start OAuth flow with local callback server
                 logger.info('Starting OAuth flow...');
@@ -251,11 +286,12 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                 }
 
                 const tokens = await exchangeCodeForTokens(result.code, pendingState);
-                await tokenStore.saveTokens(tokens);
+                await tokenStore.addAccount(tokens);
                 await tokenStore.clearPendingState();
 
                 const emailInfo = tokens.email ? ` (${tokens.email})` : '';
-                ui.showNotification(`Successfully connected to Antigravity${emailInfo}!`, { type: 'success' });
+                const totalAccounts = tokenStore.getAccountCount();
+                ui.showNotification(`Successfully connected to Antigravity${emailInfo}! Total accounts: ${totalAccounts}`, { type: 'success' });
                 logger.info('Antigravity authentication successful');
 
                 return { success: true };
@@ -269,7 +305,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
 
         async logout() {
             await tokenStore.clearTokens();
-            ui.showNotification('Logged out from Antigravity', { type: 'info' });
+            ui.showNotification('Logged out from all Antigravity accounts', { type: 'info' });
             logger.info('Antigravity logout successful');
         },
 
@@ -297,10 +333,6 @@ export async function activate(context: PluginContext): Promise<PluginActivation
 
         /**
          * Returns SDK configuration for AI SDK's createGoogleGenerativeAI().
-         * This follows the openai-codex-auth pattern:
-         * - apiKey: Dummy key (actual auth via OAuth)
-         * - baseURL: Generative Language API URL
-         * - fetch: Custom fetch that handles OAuth headers, request transformation, etc.
          */
         async getSDKConfig() {
             return {
@@ -315,30 +347,100 @@ export async function activate(context: PluginContext): Promise<PluginActivation
     // Register Commands
     // =========================================================================
 
-    const loginCommand = commands.register('login', async () => {
-        ui.showNotification('Use the provider settings to connect to Antigravity', { type: 'info' });
+    const addAccountCommand = commands.register('add-account', async () => {
+        // Trigger authentication flow to add another account
+        try {
+            const { url, verifier, state } = await getAuthorizationUrl();
+            await tokenStore.storePendingVerifier(verifier);
+            await tokenStore.storePendingState(state);
+
+            ui.showNotification('Opening browser to add another account...', { type: 'info' });
+
+            const result = await ui.startOAuthFlow({
+                authUrl: url,
+                callbackPort: 51121,
+                callbackPath: '/oauth-callback',
+                timeout: 300000,
+            });
+
+            if (!result || !result.code) {
+                await tokenStore.clearPendingState();
+                ui.showNotification('Account addition cancelled', { type: 'warning' });
+                return;
+            }
+
+            const pendingState = await tokenStore.getPendingState();
+            if (!pendingState) {
+                ui.showError('No pending authorization');
+                return;
+            }
+
+            const tokens = await exchangeCodeForTokens(result.code, pendingState);
+            await tokenStore.addAccount(tokens);
+            await tokenStore.clearPendingState();
+
+            const emailInfo = tokens.email ? ` (${tokens.email})` : '';
+            ui.showNotification(`Added account${emailInfo}! Total: ${tokenStore.getAccountCount()}`, { type: 'success' });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to add account';
+            ui.showError(message);
+        }
+    });
+
+    const listAccountsCommand = commands.register('accounts', async () => {
+        const accounts = tokenStore.getAccountsInfo();
+        if (accounts.length === 0) {
+            ui.showNotification('No accounts connected', { type: 'warning' });
+            return;
+        }
+
+        const accountList = accounts.map((a, i) =>
+            `${i + 1}. ${a.email || 'Unknown'} (${a.projectId.slice(0, 12)}...)`
+        ).join('\n');
+
+        ui.showNotification(`Connected accounts (${accounts.length}):\n${accountList}`, { type: 'info' });
+    });
+
+    const removeAccountCommand = commands.register('remove-account', async () => {
+        const accounts = tokenStore.getAccountsInfo();
+        if (accounts.length === 0) {
+            ui.showNotification('No accounts to remove', { type: 'warning' });
+            return;
+        }
+
+        if (accounts.length === 1) {
+            // Only one account, just remove it
+            await tokenStore.removeAccount(0);
+            ui.showNotification('Removed the only account', { type: 'info' });
+            return;
+        }
+
+        // Show accounts and ask user to choose
+        // For now, just remove the last account (user can use logout to remove all)
+        const lastAccount = accounts[accounts.length - 1];
+        await tokenStore.removeAccount(lastAccount.index);
+        ui.showNotification(`Removed account: ${lastAccount.email || 'Unknown'}`, { type: 'info' });
+    });
+
+    const statusCommand = commands.register('status', async () => {
+        const accountCount = tokenStore.getAccountCount();
+
+        if (accountCount === 0) {
+            ui.showNotification('Not connected to Antigravity', { type: 'warning' });
+            return;
+        }
+
+        const accounts = tokenStore.getAccountsInfo();
+        const accountList = accounts.map(a => a.email || 'Unknown').join(', ');
+        ui.showNotification(`Connected to Antigravity with ${accountCount} account(s): ${accountList}`, { type: 'success' });
     });
 
     const logoutCommand = commands.register('logout', async () => {
         await tokenStore.clearTokens();
-        ui.showNotification('Logged out from Antigravity', { type: 'info' });
+        ui.showNotification('Logged out from all Antigravity accounts', { type: 'info' });
     });
 
-    const statusCommand = commands.register('status', async () => {
-        const isAuth = tokenStore.hasValidToken();
-        const email = tokenStore.getEmail();
-        const projectId = tokenStore.getProjectId();
-
-        if (isAuth) {
-            const emailInfo = email ? ` (${email})` : '';
-            const projectInfo = projectId ? ` Project: ${projectId.slice(0, 12)}...` : '';
-            ui.showNotification(`Connected to Antigravity${emailInfo}${projectInfo}`, { type: 'success' });
-        } else {
-            ui.showNotification('Not connected to Antigravity', { type: 'warning' });
-        }
-    });
-
-    logger.info('Antigravity Auth plugin activated');
+    logger.info(`Antigravity Auth plugin activated with ${tokenStore.getAccountCount()} account(s)`);
 
     // =========================================================================
     // Cleanup
@@ -347,9 +449,11 @@ export async function activate(context: PluginContext): Promise<PluginActivation
     return {
         dispose: () => {
             providerDisposable.dispose();
-            loginCommand.dispose();
-            logoutCommand.dispose();
+            addAccountCommand.dispose();
+            listAccountsCommand.dispose();
+            removeAccountCommand.dispose();
             statusCommand.dispose();
+            logoutCommand.dispose();
             logger.info('Antigravity Auth plugin deactivated');
         },
     };

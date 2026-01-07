@@ -2,14 +2,15 @@
  * Token Store for Antigravity Auth
  *
  * Manages storage and retrieval of OAuth tokens using the plugin's secret storage.
- * Handles automatic token refresh when tokens are about to expire.
+ * Supports multiple accounts with automatic rotation via AccountManager.
  */
 
 import type { AntigravityTokens } from './types';
 import { refreshTokens, isTokenExpired } from './auth';
+import { AccountManager, type ManagedAccount, type ModelFamily, type HeaderStyle, type AccountStorageData } from './account-manager';
 
 // Storage keys
-const STORAGE_KEY = 'antigravity_tokens';
+const ACCOUNTS_STORAGE_KEY = 'antigravity_accounts';
 const PENDING_VERIFIER_KEY = 'pending_verifier';
 const PENDING_STATE_KEY = 'pending_state';
 
@@ -37,138 +38,231 @@ export interface Logger {
 export class TokenStore {
     private secrets: SecretStorage;
     private logger: Logger;
-    private cachedTokens: AntigravityTokens | null = null;
-    private refreshPromise: Promise<AntigravityTokens> | null = null;
+    private accountManager: AccountManager;
+    private refreshPromises: Map<number, Promise<ManagedAccount>> = new Map();
 
     constructor(secrets: SecretStorage, logger: Logger) {
         this.secrets = secrets;
         this.logger = logger;
+        this.accountManager = new AccountManager(logger);
     }
 
     /**
-     * Initialize the token store by loading cached tokens
+     * Initialize the token store by loading cached accounts
      */
     async initialize(): Promise<void> {
         try {
-            const stored = await this.secrets.get(STORAGE_KEY);
+            const stored = await this.secrets.get(ACCOUNTS_STORAGE_KEY);
             if (stored) {
-                this.cachedTokens = JSON.parse(stored);
-                this.logger.info('Loaded cached Antigravity tokens');
+                const data = JSON.parse(stored) as AccountStorageData;
+                this.accountManager.loadFromStorage(data);
+                this.logger.info(`Loaded ${this.accountManager.getAccountCount()} Antigravity account(s)`);
             }
         } catch (error) {
-            this.logger.warn('Failed to load cached tokens:', error);
-            this.cachedTokens = null;
+            this.logger.warn('Failed to load cached accounts:', error);
         }
     }
 
     /**
-     * Check if we have valid tokens
+     * Save accounts to storage
+     */
+    async saveAccounts(): Promise<void> {
+        const data = this.accountManager.toStorageData();
+        await this.secrets.set(ACCOUNTS_STORAGE_KEY, JSON.stringify(data));
+    }
+
+    /**
+     * Check if we have valid tokens (at least one account)
      */
     hasValidToken(): boolean {
-        if (!this.cachedTokens) {
-            return false;
-        }
-        // Consider token valid if we have a refresh token (we can refresh if access token expires)
-        return !!this.cachedTokens.refresh_token;
+        return this.accountManager.getAccountCount() > 0;
     }
 
     /**
-     * Get the current tokens (may be expired)
+     * Get account manager for direct access
      */
-    getTokens(): AntigravityTokens | null {
-        return this.cachedTokens;
+    getAccountManager(): AccountManager {
+        return this.accountManager;
     }
 
     /**
-     * Save tokens to storage
+     * Add a new account from OAuth tokens
+     */
+    async addAccount(tokens: AntigravityTokens): Promise<ManagedAccount> {
+        const account = this.accountManager.addAccount(tokens);
+        await this.saveAccounts();
+        return account;
+    }
+
+    /**
+     * Remove an account by index
+     */
+    async removeAccount(index: number): Promise<boolean> {
+        const result = this.accountManager.removeAccount(index);
+        if (result) {
+            await this.saveAccounts();
+        }
+        return result;
+    }
+
+    /**
+     * Save tokens (for backward compatibility - adds as new account)
      */
     async saveTokens(tokens: AntigravityTokens): Promise<void> {
-        this.cachedTokens = tokens;
-        await this.secrets.set(STORAGE_KEY, JSON.stringify(tokens));
-        this.logger.info('Saved Antigravity tokens');
+        await this.addAccount(tokens);
     }
 
     /**
-     * Clear all tokens (logout)
+     * Clear all accounts (logout all)
      */
     async clearTokens(): Promise<void> {
-        this.cachedTokens = null;
-        await this.secrets.delete(STORAGE_KEY);
+        // Remove all accounts
+        while (this.accountManager.getAccountCount() > 0) {
+            this.accountManager.removeAccount(0);
+        }
+        await this.secrets.delete(ACCOUNTS_STORAGE_KEY);
         await this.secrets.delete(PENDING_VERIFIER_KEY);
         await this.secrets.delete(PENDING_STATE_KEY);
-        this.logger.info('Cleared Antigravity tokens');
+        this.logger.info('Cleared all Antigravity accounts');
     }
 
     /**
-     * Get a valid access token, refreshing if necessary.
-     * This method handles concurrent refresh requests by returning the same promise.
+     * Get valid access token for a model family.
+     * Automatically rotates to next account if current is rate limited.
+     */
+    async getValidAccessTokenForFamily(family: ModelFamily): Promise<{ accessToken: string; projectId: string; account: ManagedAccount; headerStyle: HeaderStyle }> {
+        const account = this.accountManager.getCurrentOrNextForFamily(family);
+
+        if (!account) {
+            if (this.accountManager.getAccountCount() === 0) {
+                throw new Error('Not authenticated. Please login first.');
+            }
+            // All accounts are rate limited
+            const waitTime = this.accountManager.getMinWaitTime(family);
+            throw new Error(`All accounts are rate limited. Please wait ${Math.ceil(waitTime / 1000)} seconds.`);
+        }
+
+        // Determine header style (for Gemini, try both quota pools)
+        const headerStyle = this.accountManager.getAvailableHeaderStyle(account, family) || 'antigravity';
+
+        // Check if token needs refresh
+        if (!account.accessToken || !account.expiresAt || isTokenExpired(account.expiresAt)) {
+            await this.refreshAccountToken(account);
+        }
+
+        return {
+            accessToken: account.accessToken!,
+            projectId: account.projectId,
+            account,
+            headerStyle,
+        };
+    }
+
+    /**
+     * Get a valid access token (backward compatibility - uses claude family)
      */
     async getValidAccessToken(): Promise<string> {
-        if (!this.cachedTokens) {
-            throw new Error('Not authenticated. Please login first.');
-        }
-
-        // Check if token is still valid (with 5 minute buffer)
-        if (!isTokenExpired(this.cachedTokens.expires_at)) {
-            return this.cachedTokens.access_token;
-        }
-
-        // Token is expired or about to expire, need to refresh
-        this.logger.info('Access token expired, refreshing...');
-
-        // If already refreshing, wait for that to complete
-        if (this.refreshPromise) {
-            const tokens = await this.refreshPromise;
-            return tokens.access_token;
-        }
-
-        // Start refresh
-        this.refreshPromise = this.doRefresh();
-
-        try {
-            const tokens = await this.refreshPromise;
-            return tokens.access_token;
-        } finally {
-            this.refreshPromise = null;
-        }
+        const result = await this.getValidAccessTokenForFamily('claude');
+        return result.accessToken;
     }
 
     /**
-     * Perform the actual token refresh
+     * Refresh token for a specific account
      */
-    private async doRefresh(): Promise<AntigravityTokens> {
-        if (!this.cachedTokens?.refresh_token) {
-            throw new Error('No refresh token available. Please login again.');
+    private async refreshAccountToken(account: ManagedAccount): Promise<void> {
+        // If already refreshing this account, wait for that to complete
+        const existingPromise = this.refreshPromises.get(account.index);
+        if (existingPromise) {
+            await existingPromise;
+            return;
         }
 
+        const refreshPromise = this.doRefreshAccount(account);
+        this.refreshPromises.set(account.index, refreshPromise);
+
         try {
-            const newTokens = await refreshTokens(
-                this.cachedTokens.refresh_token,
-                this.cachedTokens.project_id
-            );
-            await this.saveTokens(newTokens);
-            this.logger.info('Successfully refreshed Antigravity tokens');
-            return newTokens;
-        } catch (error) {
-            this.logger.error('Failed to refresh tokens:', error);
-            // Clear tokens on refresh failure - user needs to re-authenticate
-            await this.clearTokens();
-            throw new Error('Token refresh failed. Please login again.');
+            await refreshPromise;
+        } finally {
+            this.refreshPromises.delete(account.index);
         }
     }
 
     /**
-     * Get the project ID
+     * Perform the actual token refresh for an account
+     */
+    private async doRefreshAccount(account: ManagedAccount): Promise<ManagedAccount> {
+        this.logger.info(`Refreshing token for account ${account.index} (${account.email || 'unknown'})...`);
+
+        try {
+            const newTokens = await refreshTokens(account.refreshToken, account.projectId);
+
+            // Update account with new tokens
+            this.accountManager.updateAccountTokens(
+                account,
+                newTokens.access_token,
+                newTokens.expires_at
+            );
+
+            // Update refresh token if it changed
+            if (newTokens.refresh_token !== account.refreshToken) {
+                account.refreshToken = newTokens.refresh_token;
+            }
+
+            await this.saveAccounts();
+            this.logger.info(`Successfully refreshed token for account ${account.index}`);
+            return account;
+        } catch (error) {
+            this.logger.error(`Failed to refresh token for account ${account.index}:`, error);
+            // Don't remove account on refresh failure - might be temporary
+            throw new Error(`Token refresh failed for account ${account.email || account.index}. Please re-authenticate.`);
+        }
+    }
+
+    /**
+     * Mark an account as rate limited
+     */
+    async markRateLimited(
+        account: ManagedAccount,
+        retryAfterMs: number,
+        family: ModelFamily,
+        headerStyle: HeaderStyle = 'antigravity'
+    ): Promise<void> {
+        this.accountManager.markRateLimited(account, retryAfterMs, family, headerStyle);
+        await this.saveAccounts();
+    }
+
+    /**
+     * Get the project ID (from first account for backward compatibility)
      */
     getProjectId(): string | null {
-        return this.cachedTokens?.project_id ?? null;
+        const accounts = this.accountManager.getAccounts();
+        return accounts[0]?.projectId ?? null;
     }
 
     /**
-     * Get the user email
+     * Get the user email (from first account for backward compatibility)
      */
     getEmail(): string | null {
-        return this.cachedTokens?.email ?? null;
+        const accounts = this.accountManager.getAccounts();
+        return accounts[0]?.email ?? null;
+    }
+
+    /**
+     * Get account count
+     */
+    getAccountCount(): number {
+        return this.accountManager.getAccountCount();
+    }
+
+    /**
+     * Get all accounts info for display
+     */
+    getAccountsInfo(): Array<{ index: number; email?: string; projectId: string }> {
+        return this.accountManager.getAccounts().map(a => ({
+            index: a.index,
+            email: a.email,
+            projectId: a.projectId,
+        }));
     }
 
     // =========================================================================
