@@ -9,6 +9,11 @@
 
 import type { GeminiTool, GeminiFunctionDeclaration } from './types';
 
+// Placeholder property for empty schemas
+// Claude VALIDATED mode requires at least one property in object schemas
+const EMPTY_SCHEMA_PLACEHOLDER_NAME = '_placeholder';
+const EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION = 'Placeholder. Always pass true.';
+
 // Unsupported constraint keywords that should be moved to description hints
 const UNSUPPORTED_CONSTRAINTS = [
     'minLength', 'maxLength', 'exclusiveMinimum', 'exclusiveMaximum',
@@ -110,6 +115,51 @@ function removeUnsupportedKeywords(schema: unknown, insideProperties: boolean = 
 }
 
 /**
+ * Adds placeholder property for empty object schemas.
+ * Claude VALIDATED mode requires at least one property.
+ */
+function addEmptySchemaPlaceholder(schema: unknown): unknown {
+    if (!isPlainObject(schema)) {
+        return schema;
+    }
+
+    if (Array.isArray(schema)) {
+        return schema.map(item => addEmptySchemaPlaceholder(item));
+    }
+
+    const result: SchemaObject = { ...schema };
+
+    // Check if this is an empty object schema
+    const isObjectType = result.type === 'object';
+
+    if (isObjectType) {
+        const properties = result.properties as SchemaObject | undefined;
+        const hasProperties = properties &&
+            typeof properties === 'object' &&
+            Object.keys(properties).length > 0;
+
+        if (!hasProperties) {
+            result.properties = {
+                [EMPTY_SCHEMA_PLACEHOLDER_NAME]: {
+                    type: 'boolean',
+                    description: EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
+                },
+            };
+            result.required = [EMPTY_SCHEMA_PLACEHOLDER_NAME];
+        }
+    }
+
+    // Recursively process nested objects
+    for (const [key, value] of Object.entries(result)) {
+        if (typeof value === 'object' && value !== null) {
+            result[key] = addEmptySchemaPlaceholder(value);
+        }
+    }
+
+    return result;
+}
+
+/**
  * Cleans a JSON schema for Antigravity API compatibility.
  * Transforms unsupported features into description hints.
  */
@@ -126,17 +176,25 @@ export function cleanJSONSchemaForAntigravity(schema: unknown): unknown {
     // Phase 2: Remove unsupported keywords
     result = removeUnsupportedKeywords(result) as SchemaObject;
 
+    // Phase 3: Add placeholder for empty object schemas
+    result = addEmptySchemaPlaceholder(result) as SchemaObject;
+
     return result;
 }
 
 /**
- * Default empty parameters schema for tools without parameters.
- * Claude requires all tools to have input_schema.
+ * Default parameters schema for tools without parameters.
+ * Claude requires all tools to have input_schema with at least one property.
  */
 const EMPTY_PARAMETERS_SCHEMA: Record<string, unknown> = {
     type: 'object',
-    properties: {},
-    required: [],
+    properties: {
+        [EMPTY_SCHEMA_PLACEHOLDER_NAME]: {
+            type: 'boolean',
+            description: EMPTY_SCHEMA_PLACEHOLDER_DESCRIPTION,
+        },
+    },
+    required: [EMPTY_SCHEMA_PLACEHOLDER_NAME],
 };
 
 /**
