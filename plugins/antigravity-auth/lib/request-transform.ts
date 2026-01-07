@@ -15,10 +15,12 @@ import type {
     GeminiRequest,
     GeminiGenerationConfig,
     GeminiContent,
+    GeminiPart,
     HeaderStyle,
     AntigravityHeaders,
 } from './types';
 import { getModelFamily, isClaudeThinkingModel, parseModelWithTier } from './models';
+import { cacheSignature, getCachedSignature } from './signature-cache';
 
 // ============================================================================
 // Constants
@@ -80,27 +82,51 @@ export function isStreamingRequest(url: string): boolean {
 // ============================================================================
 
 /**
- * Strip thinking parts from conversation history.
- * Claude requires a signature for thinking blocks in multi-turn conversations,
- * but we don't have access to the signature from previous responses.
- * The safest approach is to remove thinking parts from history.
+ * Restore signatures for thinking blocks in conversation history.
+ * Claude requires a signature for thinking blocks in multi-turn conversations.
+ * We try to restore signatures from cache; if not found, we strip the thinking block.
+ *
+ * Based on opencode-antigravity-auth's filterUnsignedThinkingBlocks.
  */
-function stripThinkingFromContents(contents: GeminiContent[]): GeminiContent[] {
+function restoreThinkingSignatures(contents: GeminiContent[], sessionId: string): GeminiContent[] {
     return contents.map(content => {
         if (!content.parts) return content;
 
-        // Filter out parts that are thinking blocks (have thought: true)
-        const filteredParts = content.parts.filter(part => {
-            // Skip parts with thought: true (these are thinking blocks without signatures)
-            if (part.thought === true && !part.thoughtSignature) {
-                return false;
+        const processedParts: GeminiPart[] = [];
+
+        for (const part of content.parts) {
+            // Not a thinking block - keep as is
+            if (part.thought !== true) {
+                processedParts.push(part);
+                continue;
             }
-            return true;
-        });
+
+            // Already has signature - keep as is
+            if (part.thoughtSignature) {
+                processedParts.push(part);
+                continue;
+            }
+
+            // Try to restore signature from cache
+            const thinkingText = part.text || '';
+            if (thinkingText) {
+                const cachedSig = getCachedSignature(sessionId, thinkingText);
+                if (cachedSig) {
+                    // Restore signature
+                    processedParts.push({
+                        ...part,
+                        thoughtSignature: cachedSig,
+                    });
+                    continue;
+                }
+            }
+
+            // No signature and not in cache - skip this thinking block
+            // (Claude will reject it without a signature)
+        }
 
         // If all parts were filtered out, keep at least one empty text part
-        // to maintain valid message structure
-        if (filteredParts.length === 0) {
+        if (processedParts.length === 0) {
             return {
                 ...content,
                 parts: [{ text: '' }],
@@ -109,7 +135,7 @@ function stripThinkingFromContents(contents: GeminiContent[]): GeminiContent[] {
 
         return {
             ...content,
-            parts: filteredParts,
+            parts: processedParts,
         };
     });
 }
@@ -125,6 +151,7 @@ export interface TransformResult {
     streaming: boolean;
     effectiveModel: string;
     projectId: string;
+    sessionId: string;
 }
 
 /**
@@ -168,10 +195,12 @@ export function transformRequest(
     const isThinking = isClaudeThinkingModel(requestedModel);
     const streaming = isStreamingRequest(originalUrl);
 
-    // Strip thinking parts from conversation history for Claude models
-    // Claude requires signatures for thinking blocks, but we don't have them
+    // Restore thinking signatures from cache for Claude models
+    // Claude requires signatures for thinking blocks in multi-turn conversations
+    // We use sessionId from the request or generate one
+    const sessionId = geminiRequest.sessionId || `alma-${Date.now()}`;
     if (isClaude && geminiRequest.contents) {
-        geminiRequest.contents = stripThinkingFromContents(geminiRequest.contents);
+        geminiRequest.contents = restoreThinkingSignatures(geminiRequest.contents, sessionId);
     }
 
     // Configure Claude tool calling to use VALIDATED mode (only when tools are present)
@@ -264,6 +293,7 @@ export function transformRequest(
         streaming,
         effectiveModel,
         projectId,
+        sessionId,
     };
 }
 
@@ -274,8 +304,9 @@ export function transformRequest(
 /**
  * Transform Antigravity SSE response.
  * Unwraps the Antigravity envelope to return standard Gemini format.
+ * Caches thinking block signatures for multi-turn conversations.
  */
-export function transformStreamingResponse(response: Response): Response {
+export function transformStreamingResponse(response: Response, sessionId?: string): Response {
     if (!response.body) {
         return response;
     }
@@ -311,6 +342,21 @@ export function transformStreamingResponse(response: Response): Response {
                     const data = JSON.parse(dataStr);
                     // Unwrap Antigravity envelope - return the inner response
                     const unwrapped = data.response || data;
+
+                    // Cache thinking signatures for multi-turn conversations
+                    if (sessionId && unwrapped.candidates) {
+                        for (const candidate of unwrapped.candidates) {
+                            if (candidate.content?.parts) {
+                                for (const part of candidate.content.parts) {
+                                    // Cache Gemini-style thinking (thought: true with thoughtSignature)
+                                    if (part.thought === true && part.text && part.thoughtSignature) {
+                                        cacheSignature(sessionId, part.text, part.thoughtSignature);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     controller.enqueue(encoder.encode(`data: ${JSON.stringify(unwrapped)}\n`));
                 } catch {
                     // Pass through as-is if parsing fails
@@ -335,14 +381,28 @@ export function transformStreamingResponse(response: Response): Response {
 /**
  * Transform non-streaming response from Antigravity.
  * Unwraps the Antigravity envelope to return standard Gemini format.
+ * Caches thinking block signatures for multi-turn conversations.
  */
-export async function transformNonStreamingResponse(response: Response): Promise<Response> {
+export async function transformNonStreamingResponse(response: Response, sessionId?: string): Promise<Response> {
     const text = await response.text();
 
     try {
         const data = JSON.parse(text);
         // Unwrap Antigravity envelope - return the inner response
         const unwrapped = data.response || data;
+
+        // Cache thinking signatures for multi-turn conversations
+        if (sessionId && unwrapped.candidates) {
+            for (const candidate of unwrapped.candidates) {
+                if (candidate.content?.parts) {
+                    for (const part of candidate.content.parts) {
+                        if (part.thought === true && part.text && part.thoughtSignature) {
+                            cacheSignature(sessionId, part.text, part.thoughtSignature);
+                        }
+                    }
+                }
+            }
+        }
 
         return new Response(JSON.stringify(unwrapped), {
             status: response.status,

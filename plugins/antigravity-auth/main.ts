@@ -178,11 +178,11 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                         return response;
                     }
 
-                    // Step 9: Transform response
+                    // Step 9: Transform response (pass sessionId for signature caching)
                     if (transformed.streaming) {
-                        return transformStreamingResponse(response);
+                        return transformStreamingResponse(response, transformed.sessionId);
                     } else {
-                        return await transformNonStreamingResponse(response);
+                        return await transformNonStreamingResponse(response, transformed.sessionId);
                     }
                 } catch (error) {
                     logger.error(`Error with endpoint ${endpoint}:`, error);
