@@ -142,38 +142,62 @@ function restoreThinkingSignatures(contents: GeminiContent[], sessionId: string)
 }
 
 /**
- * Generate a unique tool call ID
- */
-function generateToolCallId(): string {
-    return `toolu_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-}
-
-/**
- * Ensure all functionCall parts have an id field.
+ * Ensure all functionCall parts have IDs and match functionResponse IDs.
  * Claude requires tool_use.id to match with tool_result.tool_use_id.
+ *
+ * Uses a two-pass approach like opencode-antigravity-auth:
+ * 1. First pass: Assign IDs to all functionCalls and collect them in FIFO queues per function name
+ * 2. Second pass: Match functionResponses to their corresponding calls using FIFO order
  */
-function ensureFunctionCallIds(contents: GeminiContent[]): GeminiContent[] {
-    return contents.map(content => {
+function ensureToolIds(contents: GeminiContent[]): GeminiContent[] {
+    let toolCallCounter = 0;
+    // Track pending call IDs per function name as a FIFO queue
+    const pendingCallIdsByName = new Map<string, string[]>();
+
+    // First pass: assign IDs to all functionCalls and collect them
+    const firstPassContents = contents.map(content => {
         if (!content.parts) return content;
 
         const processedParts = content.parts.map(part => {
-            // Add id to functionCall if missing
-            if (part.functionCall && !part.functionCall.id) {
-                return {
-                    ...part,
-                    functionCall: {
-                        ...part.functionCall,
-                        id: generateToolCallId(),
-                    },
-                };
+            if (part.functionCall) {
+                const call = { ...part.functionCall };
+                if (!call.id) {
+                    call.id = `tool-call-${++toolCallCounter}`;
+                }
+                const nameKey = call.name || `tool-${toolCallCounter}`;
+                // Push to the queue for this function name
+                const queue = pendingCallIdsByName.get(nameKey) || [];
+                queue.push(call.id);
+                pendingCallIdsByName.set(nameKey, queue);
+                return { ...part, functionCall: call };
             }
             return part;
         });
 
-        return {
-            ...content,
-            parts: processedParts,
-        };
+        return { ...content, parts: processedParts };
+    });
+
+    // Second pass: match functionResponses to their corresponding calls (FIFO order)
+    return firstPassContents.map(content => {
+        if (!content.parts) return content;
+
+        const processedParts = content.parts.map(part => {
+            if (part.functionResponse) {
+                const resp = { ...part.functionResponse };
+                if (!resp.id && resp.name) {
+                    const queue = pendingCallIdsByName.get(resp.name);
+                    if (queue && queue.length > 0) {
+                        // Consume the first pending ID (FIFO order)
+                        resp.id = queue.shift();
+                        pendingCallIdsByName.set(resp.name, queue);
+                    }
+                }
+                return { ...part, functionResponse: resp };
+            }
+            return part;
+        });
+
+        return { ...content, parts: processedParts };
     });
 }
 
@@ -238,8 +262,8 @@ export function transformRequest(
     const sessionId = geminiRequest.sessionId || `alma-${Date.now()}`;
     if (isClaude && geminiRequest.contents) {
         geminiRequest.contents = restoreThinkingSignatures(geminiRequest.contents, sessionId);
-        // Ensure all functionCall parts have IDs (required by Claude)
-        geminiRequest.contents = ensureFunctionCallIds(geminiRequest.contents);
+        // Ensure all functionCall/functionResponse parts have matching IDs (required by Claude)
+        geminiRequest.contents = ensureToolIds(geminiRequest.contents);
     }
 
     // Sanitize tool schemas for Claude (remove unsupported JSON Schema features)
