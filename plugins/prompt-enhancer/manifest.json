@@ -12,7 +12,7 @@
         "alma": "^0.1.0"
     },
     "type": "transform",
-    "permissions": ["chat:read", "chat:write", "settings:read"],
+    "permissions": ["chat:read", "chat:write", "settings:read", "settings:write"],
     "activationEvents": ["onStartup"],
     "contributes": {
         "commands": [
