@@ -555,7 +555,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
         ui.showNotification('Logged out from all Antigravity accounts', { type: 'info' });
     });
 
-    const clearRateLimitsCommand = commands.register('antigravity:clear-rate-limits', {
+    const clearRateLimitsCommand = commands.register('clear-rate-limits', {
         title: 'Clear Rate Limits',
         description: 'Clear all rate limit states from Antigravity accounts',
         handler: async () => {
