@@ -6,7 +6,7 @@
         {
             "id": "hello-world",
             "name": "Hello World",
-            "version": "1.0.0",
+            "version": "1.0.1",
             "description": "A simple example plugin that demonstrates basic plugin structure",
             "author": {
                 "name": "Alma Team",
