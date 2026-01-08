@@ -352,6 +352,11 @@ export function transformRequest(
     // Add session ID for multi-turn conversations
     geminiRequest.sessionId = `alma-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+    // Ensure systemInstruction has role set (required by Antigravity API)
+    if (geminiRequest.systemInstruction) {
+        geminiRequest.systemInstruction.role = 'user';
+    }
+
     // Wrap in Antigravity envelope
     const antigravityBody: AntigravityRequestBody = {
         project: projectId,
@@ -359,6 +364,7 @@ export function transformRequest(
         request: geminiRequest,
         userAgent: 'antigravity',
         requestId: `alma-${crypto.randomUUID()}`,
+        requestType: 'agent',
     };
 
     // Build Antigravity URL

@@ -59,6 +59,7 @@ export interface AntigravityRequestBody {
     request: GeminiRequest;
     userAgent?: string;
     requestId?: string;
+    requestType?: string;
 }
 
 export interface GeminiRequest {
@@ -92,6 +93,7 @@ export interface GeminiPart {
 }
 
 export interface GeminiSystemInstruction {
+    role?: string;
     parts: Array<{ text: string }>;
 }
 
