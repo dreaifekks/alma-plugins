@@ -250,10 +250,51 @@ export class TokenStore {
                 }
             }
 
-            // No available account
+            // No available account - apply optimistic reset strategy
+            // 乐观重置策略: 双层防护机制 (matches Antigravity-Manager v3.3.19)
             if (!targetAccount) {
                 const minWait = this.accountManager.getMinWaitTime();
-                throw new Error(`All accounts are currently limited or unhealthy. Please wait ${minWait}s.`);
+
+                // Layer 1: 如果最短等待时间 <= 2秒，执行缓冲延迟
+                if (minWait !== undefined && minWait <= 2) {
+                    this.logger.warn(
+                        `All accounts rate-limited but shortest wait is ${minWait}s. Applying 500ms buffer for state sync...`
+                    );
+
+                    // 缓冲延迟 500ms
+                    await new Promise((resolve) => setTimeout(resolve, 500));
+
+                    // 重新尝试选择账号
+                    const retryAccount = this.accountManager.selectNextAccount(sortedAccounts, attempted, false);
+                    if (retryAccount) {
+                        this.logger.info(`Buffer delay successful! Found available account: ${retryAccount.email || retryAccount.index}`);
+                        targetAccount = retryAccount;
+                    } else {
+                        // Layer 2: 缓冲后仍无可用账号，执行乐观重置
+                        this.logger.warn(
+                            `Buffer delay failed. Executing optimistic reset for all ${sortedAccounts.length} accounts...`
+                        );
+
+                        // 清除所有限流记录
+                        this.accountManager.clearAllRateLimits();
+
+                        // 再次尝试选择账号
+                        const finalAccount = this.accountManager.selectNextAccount(sortedAccounts, attempted, false);
+                        if (finalAccount) {
+                            this.logger.info(`Optimistic reset successful! Using account: ${finalAccount.email || finalAccount.index}`);
+                            targetAccount = finalAccount;
+                        } else {
+                            // 所有策略都失败
+                            throw new Error('All accounts failed after optimistic reset. Please check account health.');
+                        }
+                    }
+                } else if (minWait !== undefined) {
+                    // 等待时间 > 2秒，正常返回错误
+                    throw new Error(`All accounts are currently limited. Please wait ${minWait}s.`);
+                } else {
+                    // 无限流记录但仍无可用账号
+                    throw new Error('All accounts failed or unhealthy.');
+                }
             }
 
             const accountId = targetAccount.email || String(targetAccount.index);

@@ -515,12 +515,15 @@ export class AccountManager {
     }
 
     /**
-     * Clear all rate limits
+     * Clear all rate limits (乐观重置策略)
+     *
+     * 用于乐观重置机制，当所有账号都被限流但等待时间很短时，
+     * 清除所有限流记录以解决时序竞争条件
      */
     clearAllRateLimits(): void {
         const count = this.rateLimits.size;
         this.rateLimits.clear();
-        this.logger?.info(`Cleared ${count} rate limit record(s)`);
+        this.logger?.warn(`Optimistic reset: Cleared all ${count} rate limit record(s)`);
     }
 
     // =========================================================================
@@ -623,18 +626,21 @@ export class AccountManager {
     }
 
     /**
-     * Get minimum wait time across all accounts
+     * Get minimum wait time across all rate-limited accounts
      * Matches Antigravity-Manager's min_wait calculation
+     * Returns undefined if no accounts are rate-limited
      */
-    getMinWaitTime(): number {
-        let minWait = 60; // Default 60s
+    getMinWaitTime(): number | undefined {
+        let minWait: number | undefined = undefined;
 
         for (const account of this.accounts) {
             if (account.disabled) continue;
             const accountId = account.email || String(account.index);
             const seconds = this.getResetSeconds(accountId);
-            if (seconds !== undefined && seconds < minWait) {
-                minWait = seconds;
+            if (seconds !== undefined) {
+                if (minWait === undefined || seconds < minWait) {
+                    minWait = seconds;
+                }
             }
         }
 
