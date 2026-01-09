@@ -2,10 +2,187 @@
  * Antigravity Model Definitions
  *
  * Defines Claude and Gemini models available through Antigravity OAuth.
- * Based on opencode-antigravity-auth model resolution.
+ * Matches Antigravity-Manager's model_mapping.rs exactly.
  */
 
 import type { AntigravityModelInfo, ThinkingLevel, ImageSize } from './types';
+
+// ============================================================================
+// Model Mapping (matches Antigravity-Manager's CLAUDE_TO_GEMINI)
+// ============================================================================
+
+const MODEL_MAPPING: Record<string, string> = {
+    // Direct support models
+    'claude-opus-4-5-thinking': 'claude-opus-4-5-thinking',
+    'claude-sonnet-4-5': 'claude-sonnet-4-5',
+    'claude-sonnet-4-5-thinking': 'claude-sonnet-4-5-thinking',
+
+    // Claude aliases
+    'claude-sonnet-4-5-20250929': 'claude-sonnet-4-5-thinking',
+    'claude-3-5-sonnet-20241022': 'claude-sonnet-4-5',
+    'claude-3-5-sonnet-20240620': 'claude-sonnet-4-5',
+    'claude-opus-4': 'claude-opus-4-5-thinking',
+    'claude-opus-4-5-20251101': 'claude-opus-4-5-thinking',
+    'claude-haiku-4': 'claude-sonnet-4-5',
+    'claude-3-haiku-20240307': 'claude-sonnet-4-5',
+    'claude-haiku-4-5-20251001': 'claude-sonnet-4-5',
+
+    // OpenAI protocol mapping (maps to Gemini)
+    'gpt-4': 'gemini-2.5-pro',
+    'gpt-4-turbo': 'gemini-2.5-pro',
+    'gpt-4-turbo-preview': 'gemini-2.5-pro',
+    'gpt-4-0125-preview': 'gemini-2.5-pro',
+    'gpt-4-1106-preview': 'gemini-2.5-pro',
+    'gpt-4-0613': 'gemini-2.5-pro',
+    'gpt-4o': 'gemini-2.5-pro',
+    'gpt-4o-2024-05-13': 'gemini-2.5-pro',
+    'gpt-4o-2024-08-06': 'gemini-2.5-pro',
+    'gpt-4o-mini': 'gemini-2.5-flash',
+    'gpt-4o-mini-2024-07-18': 'gemini-2.5-flash',
+    'gpt-3.5-turbo': 'gemini-2.5-flash',
+    'gpt-3.5-turbo-16k': 'gemini-2.5-flash',
+    'gpt-3.5-turbo-0125': 'gemini-2.5-flash',
+    'gpt-3.5-turbo-1106': 'gemini-2.5-flash',
+    'gpt-3.5-turbo-0613': 'gemini-2.5-flash',
+
+    // Gemini protocol mapping
+    'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',
+    'gemini-2.5-flash-thinking': 'gemini-2.5-flash-thinking',
+    'gemini-3-pro-low': 'gemini-3-pro-low',
+    'gemini-3-pro-high': 'gemini-3-pro-high',
+    'gemini-3-pro-preview': 'gemini-3-pro-preview',
+    'gemini-3-pro': 'gemini-3-pro',
+    'gemini-2.5-flash': 'gemini-2.5-flash',
+    'gemini-3-flash': 'gemini-3-flash',
+    'gemini-3-pro-image': 'gemini-3-pro-image',
+    'gemini-2.0-flash-exp': 'gemini-2.0-flash-exp',
+    'gemini-2.5-pro': 'gemini-2.5-pro',
+};
+
+// Custom model mapping (user-defined, can be extended at runtime)
+let customModelMapping: Record<string, string> = {};
+
+/**
+ * Set custom model mapping
+ */
+export function setCustomModelMapping(mapping: Record<string, string>): void {
+    customModelMapping = { ...mapping };
+}
+
+/**
+ * Get custom model mapping
+ */
+export function getCustomModelMapping(): Record<string, string> {
+    return { ...customModelMapping };
+}
+
+/**
+ * Wildcard match helper function
+ * Supports simple * wildcard matching
+ *
+ * @example
+ * - `gpt-4*` matches `gpt-4`, `gpt-4-turbo`, `gpt-4-0613`, etc.
+ * - `claude-3-5-sonnet-*` matches all 3.5 sonnet versions
+ * - `*-thinking` matches all models ending with `-thinking`
+ */
+function wildcardMatch(pattern: string, text: string): boolean {
+    const starPos = pattern.indexOf('*');
+    if (starPos === -1) {
+        return pattern === text;
+    }
+    const prefix = pattern.slice(0, starPos);
+    const suffix = pattern.slice(starPos + 1);
+    return text.startsWith(prefix) && text.endsWith(suffix);
+}
+
+/**
+ * Map model to target model (matches Antigravity-Manager's map_claude_model_to_gemini)
+ */
+export function mapModelToTarget(input: string): string {
+    // 1. Check exact match in map
+    if (MODEL_MAPPING[input]) {
+        return MODEL_MAPPING[input];
+    }
+
+    // 2. Pass-through known prefixes (gemini-, -thinking) to support dynamic suffixes
+    if (input.startsWith('gemini-') || input.includes('thinking')) {
+        return input;
+    }
+
+    // 3. Fallback to default
+    return 'claude-sonnet-4-5';
+}
+
+/**
+ * Core model routing engine (matches Antigravity-Manager's resolve_model_route)
+ * Priority: Exact match > Wildcard match > System default mapping
+ *
+ * @param originalModel Original model name
+ * @returns Mapped target model name
+ */
+export function resolveModelRoute(originalModel: string): string {
+    // 1. Exact match (highest priority) - check custom mapping first
+    if (customModelMapping[originalModel]) {
+        return customModelMapping[originalModel];
+    }
+
+    // 2. Wildcard match in custom mapping
+    for (const [pattern, target] of Object.entries(customModelMapping)) {
+        if (pattern.includes('*') && wildcardMatch(pattern, originalModel)) {
+            return target;
+        }
+    }
+
+    // 3. System default mapping
+    return mapModelToTarget(originalModel);
+}
+
+/**
+ * Get all supported model IDs (matches Antigravity-Manager's get_supported_models)
+ */
+export function getSupportedModelIds(): string[] {
+    return Object.keys(MODEL_MAPPING);
+}
+
+/**
+ * Get all dynamic models including custom mappings
+ * (matches Antigravity-Manager's get_all_dynamic_models)
+ */
+export function getAllDynamicModelIds(): string[] {
+    const modelIds = new Set<string>();
+
+    // 1. Get all built-in mapping models
+    for (const id of getSupportedModelIds()) {
+        modelIds.add(id);
+    }
+
+    // 2. Get all custom mapping models
+    for (const key of Object.keys(customModelMapping)) {
+        modelIds.add(key);
+    }
+
+    // 3. Add common Gemini/image model IDs
+    modelIds.add('gemini-3-pro-low');
+    modelIds.add('gemini-2.0-flash-exp');
+    modelIds.add('gemini-2.5-flash');
+    modelIds.add('gemini-2.5-pro');
+    modelIds.add('gemini-3-flash');
+    modelIds.add('gemini-3-pro-high');
+
+    // 4. Generate all Image Gen Combinations (Issue #247)
+    const base = 'gemini-3-pro-image';
+    const resolutions = ['', '-2k', '-4k'];
+    const ratios = ['', '-1x1', '-4x3', '-3x4', '-16x9', '-9x16', '-21x9'];
+
+    for (const res of resolutions) {
+        for (const ratio of ratios) {
+            modelIds.add(`${base}${res}${ratio}`);
+        }
+    }
+
+    const sorted = Array.from(modelIds).sort();
+    return sorted;
+}
 
 // ============================================================================
 // Model Definitions
@@ -96,8 +273,151 @@ export const ANTIGRAVITY_MODELS: AntigravityModelInfo[] = [
         contextWindow: 200000,
         maxOutputTokens: 65536,
     },
-    // NOTE: claude-opus-4-5 (without thinking) is NOT supported by Antigravity API
-    // Only thinking variants are available for Opus
+
+    // -------------------------------------------------------------------------
+    // Claude Aliases (mapped to base models)
+    // -------------------------------------------------------------------------
+    {
+        id: 'claude-sonnet-4-5-20250929',
+        name: 'Claude Sonnet 4.5 (20250929)',
+        description: 'Alias for Claude Sonnet 4.5 Thinking',
+        baseModel: 'claude-sonnet-4-5-thinking',
+        family: 'claude',
+        thinking: 'medium',
+        thinkingBudget: 16384,
+        contextWindow: 200000,
+        maxOutputTokens: 65536,
+    },
+    {
+        id: 'claude-3-5-sonnet-20241022',
+        name: 'Claude 3.5 Sonnet (20241022)',
+        description: 'Alias for Claude Sonnet 4.5',
+        baseModel: 'claude-sonnet-4-5',
+        family: 'claude',
+        thinking: 'none',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+    },
+    {
+        id: 'claude-3-5-sonnet-20240620',
+        name: 'Claude 3.5 Sonnet (20240620)',
+        description: 'Alias for Claude Sonnet 4.5',
+        baseModel: 'claude-sonnet-4-5',
+        family: 'claude',
+        thinking: 'none',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+    },
+    {
+        id: 'claude-opus-4',
+        name: 'Claude Opus 4',
+        description: 'Alias for Claude Opus 4.5 Thinking',
+        baseModel: 'claude-opus-4-5-thinking',
+        family: 'claude',
+        thinking: 'medium',
+        thinkingBudget: 16384,
+        contextWindow: 200000,
+        maxOutputTokens: 65536,
+    },
+    {
+        id: 'claude-opus-4-5-20251101',
+        name: 'Claude Opus 4.5 (20251101)',
+        description: 'Alias for Claude Opus 4.5 Thinking',
+        baseModel: 'claude-opus-4-5-thinking',
+        family: 'claude',
+        thinking: 'medium',
+        thinkingBudget: 16384,
+        contextWindow: 200000,
+        maxOutputTokens: 65536,
+    },
+    {
+        id: 'claude-haiku-4',
+        name: 'Claude Haiku 4',
+        description: 'Alias for Claude Sonnet 4.5 (Haiku not available)',
+        baseModel: 'claude-sonnet-4-5',
+        family: 'claude',
+        thinking: 'none',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+    },
+    {
+        id: 'claude-3-haiku-20240307',
+        name: 'Claude 3 Haiku (20240307)',
+        description: 'Alias for Claude Sonnet 4.5 (Haiku not available)',
+        baseModel: 'claude-sonnet-4-5',
+        family: 'claude',
+        thinking: 'none',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+    },
+    {
+        id: 'claude-haiku-4-5-20251001',
+        name: 'Claude Haiku 4.5 (20251001)',
+        description: 'Alias for Claude Sonnet 4.5 (Haiku not available)',
+        baseModel: 'claude-sonnet-4-5',
+        family: 'claude',
+        thinking: 'none',
+        contextWindow: 200000,
+        maxOutputTokens: 8192,
+    },
+
+    // -------------------------------------------------------------------------
+    // OpenAI Aliases (mapped to Gemini models)
+    // -------------------------------------------------------------------------
+    {
+        id: 'gpt-4',
+        name: 'GPT-4',
+        description: 'Maps to Gemini 2.5 Pro',
+        baseModel: 'gemini-2.5-pro',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+    },
+    {
+        id: 'gpt-4-turbo',
+        name: 'GPT-4 Turbo',
+        description: 'Maps to Gemini 2.5 Pro',
+        baseModel: 'gemini-2.5-pro',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+    },
+    {
+        id: 'gpt-4-turbo-preview',
+        name: 'GPT-4 Turbo Preview',
+        description: 'Maps to Gemini 2.5 Pro',
+        baseModel: 'gemini-2.5-pro',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+    },
+    {
+        id: 'gpt-4o',
+        name: 'GPT-4o',
+        description: 'Maps to Gemini 2.5 Pro',
+        baseModel: 'gemini-2.5-pro',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+    },
+    {
+        id: 'gpt-4o-mini',
+        name: 'GPT-4o Mini',
+        description: 'Maps to Gemini 2.5 Flash',
+        baseModel: 'gemini-2.5-flash',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+    },
+    {
+        id: 'gpt-3.5-turbo',
+        name: 'GPT-3.5 Turbo',
+        description: 'Maps to Gemini 2.5 Flash',
+        baseModel: 'gemini-2.5-flash',
+        family: 'gemini',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+    },
 
     // -------------------------------------------------------------------------
     // Gemini 2.0 Models
@@ -277,12 +597,19 @@ export function getModelInfo(modelId: string): AntigravityModelInfo | undefined 
 }
 
 /**
- * Get the base model ID for API calls
+ * Get the base model ID for API calls (with routing support)
  */
 export function getBaseModelId(modelId: string): string {
     const cleanId = stripProviderPrefix(modelId);
+
+    // First check if we have model info
     const model = getModelInfo(cleanId);
-    return model?.baseModel ?? cleanId;
+    if (model) {
+        return model.baseModel;
+    }
+
+    // Use model routing for unknown models
+    return resolveModelRoute(cleanId);
 }
 
 /**
@@ -294,8 +621,10 @@ export function getModelFamily(modelId: string): 'claude' | 'gemini' {
     if (model) {
         return model.family;
     }
-    // Detect from model ID
-    if (cleanId.toLowerCase().includes('claude')) {
+
+    // Use routing to determine family
+    const resolved = resolveModelRoute(cleanId);
+    if (resolved.includes('claude')) {
         return 'claude';
     }
     return 'gemini';
