@@ -734,7 +734,8 @@ export class AccountManager {
     selectNextAccount(
         sortedAccounts: ManagedAccount[],
         attempted: Set<string>,
-        skipRateLimited: boolean = true
+        skipRateLimited: boolean = true,
+        model?: string
     ): ManagedAccount | null {
         const total = sortedAccounts.length;
         if (total === 0) return null;
@@ -751,7 +752,9 @@ export class AccountManager {
                 continue;
             }
 
-            if (skipRateLimited && this.isRateLimited(accountId)) {
+            // Use quota-based availability check (not just timer-based)
+            // This fixes the bug where account with recovered quota is still skipped
+            if (skipRateLimited && !this.isAccountAvailable(candidate, model)) {
                 continue;
             }
 

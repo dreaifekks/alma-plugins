@@ -188,14 +188,14 @@ export class TokenStore {
                 const boundAccount = this.accountManager.getAccountForSession(sessionId);
                 if (boundAccount) {
                     const accountId = boundAccount.email || String(boundAccount.index);
-                    const resetSec = this.accountManager.getRemainingWait(accountId);
 
-                    if (resetSec > 0) {
+                    // Use quota-based availability check (not just timer-based)
+                    if (!this.accountManager.isAccountAvailable(boundAccount)) {
                         // 【修复 Issue #284】立即解绑并切换账号，不再阻塞等待
                         // 原因：阻塞等待会导致并发请求时客户端 socket 超时 (UND_ERR_SOCKET)
                         // Account is rate-limited: unbind and switch immediately (all modes)
                         this.logger.warn(
-                            `Session ${sessionId.slice(0, 8)}... bound account ${accountId} is rate-limited (${resetSec}s remaining). Unbinding and switching.`
+                            `Session ${sessionId.slice(0, 8)}... bound account ${accountId} has no remaining quota. Unbinding and switching.`
                         );
                         this.accountManager.unbindSession(sessionId);
                     } else if (!attempted.has(accountId)) {
@@ -217,7 +217,8 @@ export class TokenStore {
                         const lastAccount = this.accountManager.getAccountByIndex(lastUsedInfo.accountIndex);
                         if (lastAccount) {
                             const accountId = lastAccount.email || String(lastAccount.index);
-                            if (!attempted.has(accountId) && !this.accountManager.isRateLimited(accountId)) {
+                            // Use quota-based availability check (not just timer-based)
+                            if (!attempted.has(accountId) && this.accountManager.isAccountAvailable(lastAccount)) {
                                 this.logger.debug(`60s Window: Reusing last account ${accountId}`);
                                 targetAccount = lastAccount;
                             }
