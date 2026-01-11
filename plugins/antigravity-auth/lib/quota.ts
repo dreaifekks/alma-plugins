@@ -33,7 +33,8 @@ interface LoadProjectResponse {
     paidTier?: Tier;
 }
 
-export type SubscriptionTier = 'ULTRA' | 'PRO' | 'FREE' | 'UNKNOWN';
+// Subscription tier - pass through whatever the API returns (matches Antigravity-Manager)
+export type SubscriptionTier = string;
 
 export interface ModelQuota {
     name: string;
@@ -49,9 +50,9 @@ export interface QuotaData {
 
 /**
  * Fetch subscription tier from loadCodeAssist API.
- * This is used for account rotation priority (ULTRA > PRO > FREE).
+ * This is used for account rotation priority.
  * @param accessToken - Valid OAuth access token
- * @returns Subscription tier or undefined
+ * @returns Subscription tier ID or undefined
  */
 async function fetchSubscriptionTier(accessToken: string): Promise<SubscriptionTier | undefined> {
     try {
@@ -72,13 +73,10 @@ async function fetchSubscriptionTier(accessToken: string): Promise<SubscriptionT
         const data: LoadProjectResponse = await response.json();
 
         // Priority: paidTier > currentTier (matches Antigravity-Manager logic)
+        // Pass through whatever the API returns
         const tierId = data.paidTier?.id ?? data.currentTier?.id;
 
-        if (tierId === 'ULTRA' || tierId === 'PRO' || tierId === 'FREE') {
-            return tierId as SubscriptionTier;
-        }
-
-        return 'UNKNOWN';
+        return tierId;
     } catch {
         return undefined;
     }

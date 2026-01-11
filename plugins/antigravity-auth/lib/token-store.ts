@@ -639,10 +639,12 @@ export class TokenStore {
             this.logger.info(`Fetching quota for account ${account.index} (${account.email || 'unknown'})...`);
             const quota = await fetchQuota(account.accessToken, account.projectId);
             account.quota = quota;
-            // Update subscription tier for rotation priority (ULTRA > PRO > FREE)
+            // Update subscription tier for rotation priority
             if (quota.subscriptionTier) {
                 account.subscriptionTier = quota.subscriptionTier;
                 this.logger.info(`Account ${account.index} subscription tier: ${quota.subscriptionTier}`);
+            } else {
+                this.logger.debug(`Account ${account.index} subscription tier: (not available)`);
             }
             this.logger.info(`Got ${quota.models.length} model(s) for account ${account.index}`);
             return quota;
