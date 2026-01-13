@@ -1,7 +1,7 @@
 {
     "id": "tool-monitor",
     "name": "Tool Monitor",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "description": "Monitor and track all tool executions with statistics and performance metrics. Persists data across sessions and loads historical data from messages.",
     "author": {
         "name": "Alma Team"
@@ -12,7 +12,7 @@
     },
     "type": "ui",
     "activationEvents": ["onStartup"],
-    "permissions": ["chat:read"],
+    "permissions": ["chat:read", "notifications"],
     "contributes": {
         "commands": [
             {
