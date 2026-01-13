@@ -1,7 +1,7 @@
 {
     "$schema": "./registry.schema.json",
     "version": "1.0.0",
-    "lastUpdated": "2026-01-10T00:00:00Z",
+    "lastUpdated": "2026-01-13T00:00:00Z",
     "plugins": [
         {
             "id": "hello-world",
@@ -108,7 +108,7 @@
         {
             "id": "antigravity-auth",
             "name": "Antigravity Auth",
-            "version": "1.13.1",
+            "version": "1.13.2",
             "description": "Use Google Antigravity IDE subscription to access Claude and Gemini models via OAuth authentication",
             "author": {
                 "name": "Alma Community"
