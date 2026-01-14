@@ -167,39 +167,76 @@ export async function activate(context: PluginContext): Promise<PluginActivation
      * This prevents infinite loops when function_call was an item_reference that got filtered
      */
     const normalizeOrphanedToolOutputs = (input: any[]): any[] => {
-        // Collect all function call IDs
+        // Collect all call IDs by type (matching opencode's collectCallIds)
         const functionCallIds = new Set<string>();
+        const localShellCallIds = new Set<string>();
+        const customToolCallIds = new Set<string>();
+
         for (const item of input) {
-            if (item.type === 'function_call' && item.call_id) {
-                functionCallIds.add(item.call_id);
+            const callId = typeof item.call_id === 'string' ? item.call_id.trim() : null;
+            if (!callId) continue;
+
+            switch (item.type) {
+                case 'function_call':
+                    functionCallIds.add(callId);
+                    break;
+                case 'local_shell_call':
+                    localShellCallIds.add(callId);
+                    break;
+                case 'custom_tool_call':
+                    customToolCallIds.add(callId);
+                    break;
             }
         }
 
-        // Convert orphaned function_call_output items to messages
+        // Helper to convert orphaned output to message
+        const convertToMessage = (item: any, callId: string | null) => {
+            const toolName = item.name || 'tool';
+            const labelCallId = callId || 'unknown';
+            let text: string;
+            try {
+                text = typeof item.output === 'string' ? item.output : JSON.stringify(item.output);
+            } catch {
+                text = String(item.output ?? '');
+            }
+            if (text.length > 16000) {
+                text = text.slice(0, 16000) + '\n...[truncated]';
+            }
+            return {
+                type: 'message',
+                role: 'assistant',
+                content: `[Previous ${toolName} result; call_id=${labelCallId}]: ${text}`,
+            };
+        };
+
+        // Convert orphaned output items to messages
         return input.map((item) => {
+            const callId = typeof item.call_id === 'string' ? item.call_id.trim() : null;
+
             if (item.type === 'function_call_output') {
-                const callId = item.call_id;
-                const hasMatch = callId && functionCallIds.has(callId);
+                const hasMatch = callId && (functionCallIds.has(callId) || localShellCallIds.has(callId));
                 if (!hasMatch) {
-                    // Convert to message to preserve context
-                    const toolName = item.name || 'tool';
-                    const labelCallId = callId || 'unknown';
-                    let text: string;
-                    try {
-                        text = typeof item.output === 'string' ? item.output : JSON.stringify(item.output);
-                    } catch {
-                        text = String(item.output ?? '');
-                    }
-                    if (text.length > 16000) {
-                        text = text.slice(0, 16000) + '\n...[truncated]';
-                    }
-                    return {
-                        type: 'message',
-                        role: 'assistant',
-                        content: `[Previous ${toolName} result; call_id=${labelCallId}]: ${text}`,
-                    };
+                    logger.debug(`[DEBUG] Converting orphaned function_call_output to message: call_id=${callId}`);
+                    return convertToMessage(item, callId);
                 }
             }
+
+            if (item.type === 'custom_tool_call_output') {
+                const hasMatch = callId && customToolCallIds.has(callId);
+                if (!hasMatch) {
+                    logger.debug(`[DEBUG] Converting orphaned custom_tool_call_output to message: call_id=${callId}`);
+                    return convertToMessage(item, callId);
+                }
+            }
+
+            if (item.type === 'local_shell_call_output') {
+                const hasMatch = callId && localShellCallIds.has(callId);
+                if (!hasMatch) {
+                    logger.debug(`[DEBUG] Converting orphaned local_shell_call_output to message: call_id=${callId}`);
+                    return convertToMessage(item, callId);
+                }
+            }
+
             return item;
         });
     };
@@ -269,11 +306,31 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                     let filteredInput = parsed.input || parsed.messages;
                     const hasTools = !!parsed.tools && parsed.tools.length > 0;
 
+                    // DEBUG: Log the original input to understand what AI SDK sends
                     if (Array.isArray(filteredInput)) {
+                        const typeCounts: Record<string, number> = {};
+                        let itemRefCount = 0;
+                        for (const item of filteredInput) {
+                            const t = item.type || 'unknown';
+                            typeCounts[t] = (typeCounts[t] || 0) + 1;
+                            if (t === 'item_reference') {
+                                itemRefCount++;
+                                logger.warn(`[DEBUG] item_reference found: id=${item.id}, ref_id=${item.item_id || item.reference_id || 'N/A'}`);
+                            }
+                        }
+                        logger.info(`[DEBUG] Original input: ${filteredInput.length} items, types: ${JSON.stringify(typeCounts)}`);
+                        if (itemRefCount > 0) {
+                            logger.warn(`[DEBUG] Found ${itemRefCount} item_reference entries that will be filtered out!`);
+                        }
+                    }
+
+                    if (Array.isArray(filteredInput)) {
+                        const beforeCount = filteredInput.length;
                         filteredInput = filteredInput
                             .filter((item: any) => {
                                 // Remove AI SDK constructs not supported by Codex API
                                 if (item.type === 'item_reference') {
+                                    logger.warn(`[DEBUG] Filtering out item_reference: ${JSON.stringify(item).slice(0, 200)}`);
                                     return false;
                                 }
                                 return true;
@@ -287,6 +344,11 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                                 return item;
                             });
 
+                        const afterCount = filteredInput.length;
+                        if (beforeCount !== afterCount) {
+                            logger.warn(`[DEBUG] Filtered ${beforeCount - afterCount} items (from ${beforeCount} to ${afterCount})`);
+                        }
+
                         // Handle orphaned tool outputs (matching opencode's normalizeOrphanedToolOutputs)
                         // This converts orphaned function_call_output items to messages to preserve context
                         filteredInput = normalizeOrphanedToolOutputs(filteredInput);
@@ -296,6 +358,18 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                         // Note: We don't filter Alma system prompts - they coexist with Codex instructions
                         // This preserves Alma's context (date, platform, memories) while adding Codex behavior
                         filteredInput = addAlmaBridgeMessage(filteredInput, hasTools);
+
+                        // DEBUG: Log final input summary
+                        const finalTypeCounts: Record<string, number> = {};
+                        const roleCounts: Record<string, number> = {};
+                        for (const item of filteredInput) {
+                            const t = item.type || 'unknown';
+                            finalTypeCounts[t] = (finalTypeCounts[t] || 0) + 1;
+                            if (item.role) {
+                                roleCounts[item.role] = (roleCounts[item.role] || 0) + 1;
+                            }
+                        }
+                        logger.info(`[DEBUG] Final input: ${filteredInput.length} items, types: ${JSON.stringify(finalTypeCounts)}, roles: ${JSON.stringify(roleCounts)}`);
                     }
 
                     // Fetch Codex instructions from GitHub (matching opencode)
