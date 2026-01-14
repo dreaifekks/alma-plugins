@@ -50,6 +50,75 @@ const HTTP_STATUS = {
 } as const;
 
 // ============================================================================
+// Item Reference Cache (for expanding item_reference to actual content)
+// ============================================================================
+
+// Cache to store items by their ID for expanding item_reference
+// This is necessary because Codex API uses store=false (stateless mode)
+// but AI SDK may send item_reference to reference previous items
+const itemCache = new Map<string, any>();
+
+/**
+ * Store an item in the cache if it has an ID
+ */
+function cacheItem(item: any): void {
+    if (item && item.id) {
+        itemCache.set(item.id, item);
+    }
+}
+
+/**
+ * Expand item_reference to actual content from cache
+ * Returns the referenced item if found, otherwise returns a placeholder message
+ */
+function expandItemReference(ref: any): any | null {
+    if (ref.type !== 'item_reference' || !ref.id) {
+        return null;
+    }
+
+    const cachedItem = itemCache.get(ref.id);
+    if (cachedItem) {
+        // Return a copy without the ID (Codex API stateless mode)
+        const { id, ...itemWithoutId } = cachedItem;
+        return itemWithoutId;
+    }
+
+    // Item not found in cache - this shouldn't happen in normal flow
+    // Return null to filter it out
+    return null;
+}
+
+/**
+ * Process response to cache items with IDs for future reference
+ */
+function cacheResponseItems(responseText: string): void {
+    try {
+        const lines = responseText.split('\n');
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                try {
+                    const data = JSON.parse(line.substring(6));
+                    // Cache response items that have IDs
+                    if (data.response?.output) {
+                        for (const item of data.response.output) {
+                            cacheItem(item);
+                        }
+                    }
+                    // Also cache individual items from streaming events
+                    if (data.item) {
+                        cacheItem(data.item);
+                    }
+                } catch {
+                    // Skip malformed JSON
+                }
+            }
+        }
+    } catch {
+        // Ignore errors in caching
+    }
+}
+
+// ============================================================================
 // Plugin Activation
 // ============================================================================
 
@@ -270,14 +339,27 @@ export async function activate(context: PluginContext): Promise<PluginActivation
                     const hasTools = !!parsed.tools && parsed.tools.length > 0;
 
                     if (Array.isArray(filteredInput)) {
+                        // First, cache all items with IDs for potential future reference
+                        for (const item of filteredInput) {
+                            cacheItem(item);
+                        }
+
                         filteredInput = filteredInput
-                            .filter((item: any) => {
-                                // Remove AI SDK constructs not supported by Codex API
+                            .map((item: any) => {
+                                // Expand item_reference to actual content from cache
                                 if (item.type === 'item_reference') {
-                                    return false;
+                                    const expanded = expandItemReference(item);
+                                    if (expanded) {
+                                        logger.debug(`Expanded item_reference ${item.id} to ${expanded.type}`);
+                                        return expanded;
+                                    }
+                                    // If not found in cache, filter it out
+                                    logger.warn(`item_reference ${item.id} not found in cache, filtering out`);
+                                    return null;
                                 }
-                                return true;
+                                return item;
                             })
+                            .filter((item: any) => item !== null)
                             .map((item: any) => {
                                 // Strip IDs from all items (Codex API stateless mode)
                                 if (item.id) {
@@ -396,11 +478,69 @@ export async function activate(context: PluginContext): Promise<PluginActivation
             }
 
             if (!isStreaming) {
+                // For non-streaming, we need to cache items from the full response
+                const clonedResponse = response.clone();
+                const fullText = await clonedResponse.text();
+                cacheResponseItems(fullText);
+
+                // Now convert to JSON using the original response
                 return await convertSseToJson(response, responseHeaders);
             }
 
-            // Return streaming response as-is
-            return new Response(response.body, {
+            // For streaming responses, create a transform stream to cache items while passing through
+            if (!response.body) {
+                return response;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const stream = new ReadableStream({
+                async pull(controller) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        // Process any remaining buffer
+                        if (buffer) {
+                            cacheResponseItems(buffer);
+                        }
+                        controller.close();
+                        return;
+                    }
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    buffer += chunk;
+
+                    // Try to cache complete SSE events
+                    const lines = buffer.split('\n');
+                    // Keep the last potentially incomplete line in buffer
+                    buffer = lines.pop() || '';
+
+                    // Cache items from complete lines
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.substring(6));
+                                if (data.response?.output) {
+                                    for (const item of data.response.output) {
+                                        cacheItem(item);
+                                    }
+                                }
+                                if (data.item) {
+                                    cacheItem(data.item);
+                                }
+                            } catch {
+                                // Ignore JSON parse errors
+                            }
+                        }
+                    }
+
+                    // Pass through the original chunk
+                    controller.enqueue(value);
+                },
+            });
+
+            return new Response(stream, {
                 status: response.status,
                 statusText: response.statusText,
                 headers: responseHeaders,
