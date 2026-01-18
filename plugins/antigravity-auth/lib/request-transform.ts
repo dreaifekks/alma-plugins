@@ -79,6 +79,26 @@ export function isStreamingRequest(url: string): boolean {
     return url.includes(':streamGenerateContent');
 }
 
+/**
+ * Map logical model names to physical model names for upstream compatibility
+ * (matches Antigravity-Manager's common_utils.rs)
+ *
+ * Antigravity API only recognizes certain physical model names, so we need to
+ * map our internal logical names back to what the API expects.
+ */
+export function mapToPhysicalModel(model: string): string {
+    switch (model) {
+        case 'gemini-3-pro-preview':
+            return 'gemini-3-pro-high';  // Preview maps back to High
+        case 'gemini-3-pro-image-preview':
+            return 'gemini-3-pro-image';
+        case 'gemini-3-flash-preview':
+            return 'gemini-3-flash';
+        default:
+            return model;
+    }
+}
+
 // ============================================================================
 // Conversation Sanitization
 // ============================================================================
@@ -245,9 +265,12 @@ export function transformRequest(
 
     // Resolve model with thinking tier
     const { baseModel, thinkingLevel, thinkingBudget } = parseModelWithTier(requestedModel);
-    const effectiveModel = baseModel;
 
-    logger?.debug(`Model resolution: ${requestedModel} -> ${effectiveModel}, thinking=${thinkingLevel}, budget=${thinkingBudget}`);
+    // Map logical model names to physical model names for upstream compatibility
+    // (matches Antigravity-Manager's common_utils.rs)
+    const effectiveModel = mapToPhysicalModel(baseModel);
+
+    logger?.debug(`Model resolution: ${requestedModel} -> ${baseModel} -> ${effectiveModel}, thinking=${thinkingLevel}, budget=${thinkingBudget}`);
 
     const family = getModelFamily(requestedModel);
     const isClaude = family === 'claude';
