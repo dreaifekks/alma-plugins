@@ -97,7 +97,7 @@ export async function fetchQuota(accessToken: string, projectId: string): Promis
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',
-                'User-Agent': 'antigravity/1.11.3 Darwin/arm64',
+                'User-Agent': 'antigravity/1.15.8 Darwin/arm64',
             },
             body: JSON.stringify({ project: projectId }),
         }),
