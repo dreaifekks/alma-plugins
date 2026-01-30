@@ -6,6 +6,7 @@
  */
 
 import type { PKCEChallenge, OAuthConfig, AntigravityTokens } from './types';
+import { primeAntigravityUserAgent, getAntigravityUserAgent } from './antigravity-headers';
 
 // ============================================================================
 // OAuth Configuration (from opencode-antigravity-auth)
@@ -278,10 +279,11 @@ async function fetchProjectId(accessToken: string): Promise<string> {
         'https://autopush-cloudcode-pa.sandbox.googleapis.com',
     ];
 
+    primeAntigravityUserAgent();
     const headers: Record<string, string> = {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
-        'User-Agent': 'google-api-nodejs-client/9.15.1',
+        'User-Agent': getAntigravityUserAgent(),
         'X-Goog-Api-Client': 'google-cloud-sdk vscode_cloudshelleditor/0.1',
         'Client-Metadata': '{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}',
     };

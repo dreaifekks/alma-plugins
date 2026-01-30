@@ -25,6 +25,7 @@ import {
     transformNonStreamingResponse,
     ANTIGRAVITY_ENDPOINTS,
 } from './lib/request-transform';
+import { primeAntigravityUserAgent } from './lib/antigravity-headers';
 
 // ============================================================================
 // Constants
@@ -96,6 +97,7 @@ export async function activate(context: PluginContext): Promise<PluginActivation
     const { logger, storage, providers, commands, ui } = context;
 
     logger.info('Antigravity Auth plugin activating...');
+    primeAntigravityUserAgent();
 
     // Initialize token store
     const tokenStore = new TokenStore(storage.secrets, logger);

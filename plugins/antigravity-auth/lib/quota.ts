@@ -3,6 +3,8 @@
  * This mirrors the implementation in Antigravity-Manager.
  */
 
+import { primeAntigravityUserAgent, getAntigravityUserAgent } from './antigravity-headers';
+
 const CLOUD_CODE_BASE_URL = 'https://cloudcode-pa.googleapis.com';
 const QUOTA_API_URL = `${CLOUD_CODE_BASE_URL}/v1internal:fetchAvailableModels`;
 const LOAD_CODE_ASSIST_URL = `${CLOUD_CODE_BASE_URL}/v1internal:loadCodeAssist`;
@@ -56,12 +58,13 @@ export interface QuotaData {
  */
 async function fetchSubscriptionTier(accessToken: string): Promise<SubscriptionTier | undefined> {
     try {
+        primeAntigravityUserAgent();
         const response = await fetch(LOAD_CODE_ASSIST_URL, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',
-                'User-Agent': 'antigravity/windows/amd64',
+                'User-Agent': getAntigravityUserAgent(),
             },
             body: JSON.stringify({ metadata: { ideType: 'ANTIGRAVITY' } }),
         });
@@ -90,6 +93,7 @@ async function fetchSubscriptionTier(accessToken: string): Promise<SubscriptionT
  */
 export async function fetchQuota(accessToken: string, projectId: string): Promise<QuotaData> {
     // Fetch subscription tier and quota in parallel
+    primeAntigravityUserAgent();
     const [subscriptionTier, quotaResponse] = await Promise.all([
         fetchSubscriptionTier(accessToken),
         fetch(QUOTA_API_URL, {
@@ -97,7 +101,7 @@ export async function fetchQuota(accessToken: string, projectId: string): Promis
             headers: {
                 'Authorization': `Bearer ${accessToken}`,
                 'Content-Type': 'application/json',
-                'User-Agent': 'antigravity/1.15.8 Darwin/arm64',
+                'User-Agent': getAntigravityUserAgent(),
             },
             body: JSON.stringify({ project: projectId }),
         }),

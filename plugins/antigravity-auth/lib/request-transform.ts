@@ -23,6 +23,7 @@ import { getModelFamily, isClaudeThinkingModel, parseModelWithTier, isImageModel
 import { cacheSignature, getCachedSignature } from './signature-cache';
 import { sanitizeToolsForAntigravity } from './schema-sanitizer';
 import { analyzeConversationState, closeToolLoopForThinking, needsThinkingRecovery } from './thinking-recovery';
+import { primeAntigravityUserAgent, getAntigravityUserAgent } from './antigravity-headers';
 
 // ============================================================================
 // Constants
@@ -434,8 +435,10 @@ You are pair programming with a USER to solve their coding task. The task may re
     headers.set('Authorization', `Bearer ${accessToken}`);
     headers.set('Content-Type', 'application/json');
 
+    primeAntigravityUserAgent();
     const selectedHeaders = headerStyle === 'gemini-cli' ? GEMINI_CLI_HEADERS : ANTIGRAVITY_HEADERS;
-    headers.set('User-Agent', selectedHeaders['User-Agent']);
+    const userAgent = headerStyle === 'gemini-cli' ? selectedHeaders['User-Agent'] : getAntigravityUserAgent();
+    headers.set('User-Agent', userAgent);
     headers.set('X-Goog-Api-Client', selectedHeaders['X-Goog-Api-Client']);
     headers.set('Client-Metadata', selectedHeaders['Client-Metadata']);
 
